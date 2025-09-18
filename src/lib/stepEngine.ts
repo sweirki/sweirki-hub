@@ -6,11 +6,15 @@ import "nerdamer/Extra";
 
 import { normalizeExpr } from "./ocrCleanup";
 
+// Supported variable list (can expand as needed)
+export const getSupportedVariables = () => ["x", "y", "z"];
+
 export interface Step {
   type: "comment" | "math" | "final";
   text: string;
 }
 
+// Types of equations supported
 export type EquationType =
   | "absolute"
   | "inequality"
@@ -21,21 +25,7 @@ export type EquationType =
   | "linear"
   | "generic";
 
-// 🧠 Helpers
-function safeSolve(expr: string, variable: string): string[] {
-  const result = nerdamer.solve(expr, variable);
-  return Array.isArray(result) ? result.map(r => r.toString()) : [result.toString()];
-}
-
-function safeCoeff(expanded: string, variable: string, power: number, fallback: string): string {
-  try {
-    return nerdamer(`coeff(${expanded}, ${variable}, ${power})`).evaluate().text();
-  } catch {
-    return fallback;
-  }
-}
-
-// 🔍 Classify
+// Classify equation type based on input string
 export function classifyEquation(expr: string): { type: EquationType } {
   const e = normalizeExpr(expr);
   if (e.includes("|")) return { type: "absolute" };
@@ -48,7 +38,63 @@ export function classifyEquation(expr: string): { type: EquationType } {
   return { type: "generic" };
 }
 
-// 🟡 Linear
+// Solve the equation and return steps and final answer
+export function solveEquation(expr: string, variable: string): { steps: Step[]; answer: string } {
+  const { type } = classifyEquation(expr);
+  let steps: Step[] = [];
+  let answer = "";
+
+  switch (type) {
+    case "linear":
+      steps = solveLinear(expr, variable);
+      break;
+    case "quadratic":
+      steps = solveQuadratic(expr, variable);
+      break;
+    case "polynomial":
+      steps = solvePolynomial(expr, variable);
+      break;
+    case "rational":
+      steps = solveRational(expr, variable);
+      break;
+    case "absolute":
+      steps = solveAbsolute(expr, variable);
+      break;
+    case "inequality":
+      steps = solveInequality(expr, variable);
+      break;
+    case "system":
+      steps = solveSystem(expr.split(";"), [variable]);
+      break;
+    default:
+      steps = solveGeneric(expr, variable);
+      break;
+  }
+  const finalStep = steps.find((s) => s.type === "final");
+  answer = finalStep?.text || "";
+  return { steps, answer };
+}
+
+// Helper for robust equation solving
+function safeSolve(expr: string, variable: string): string[] {
+  try {
+    const result = nerdamer.solve(expr, variable);
+    return Array.isArray(result) ? result.map(r => r.toString()) : [result.toString()];
+  } catch (err: any) {
+    throw new Error(`Could not solve: ${err.message}`);
+  }
+}
+
+// Get coefficient for a variable's power
+function safeCoeff(expanded: string, variable: string, power: number, fallback: string): string {
+  try {
+    return nerdamer(`coeff(${expanded}, ${variable}, ${power})`).evaluate().text();
+  } catch {
+    return fallback;
+  }
+}
+
+// Linear equation solver
 export function solveLinear(expr: string, variable: string): Step[] {
   const steps: Step[] = [];
   try {
@@ -60,14 +106,12 @@ export function solveLinear(expr: string, variable: string): Step[] {
     steps.push({ type: "math", text: expr });
 
     const solution = safeSolve(cleaned, variable)[0];
-
     const coeffMatch = lhs.match(new RegExp(`(-?\\d*\\.?\\d*)${variable}`));
     if (coeffMatch) {
       const coeff = coeffMatch[1] || "1";
       steps.push({ type: "comment", text: `Divide both sides by ${coeff}` });
       steps.push({ type: "math", text: `${variable} = (${rhs}) / ${coeff}` });
     }
-
     steps.push({ type: "final", text: `${variable} = ${solution}` });
     return steps;
   } catch (err: any) {
@@ -75,7 +119,7 @@ export function solveLinear(expr: string, variable: string): Step[] {
   }
 }
 
-// 🟡 Quadratic
+// Quadratic equation solver
 export function solveQuadratic(expr: string, variable: string): Step[] {
   const steps: Step[] = [];
   try {
@@ -118,7 +162,7 @@ export function solveQuadratic(expr: string, variable: string): Step[] {
   }
 }
 
-// 🟡 Polynomial
+// Polynomial equation solver
 export function solvePolynomial(expr: string, variable: string): Step[] {
   const steps: Step[] = [];
   try {
@@ -135,7 +179,7 @@ export function solvePolynomial(expr: string, variable: string): Step[] {
   }
 }
 
-// 🟡 Rational
+// Rational equation solver
 export function solveRational(expr: string, variable: string): Step[] {
   const steps: Step[] = [];
   try {
@@ -153,7 +197,7 @@ export function solveRational(expr: string, variable: string): Step[] {
   }
 }
 
-// 🟡 Absolute
+// Absolute value equation solver
 export function solveAbsolute(expr: string, variable: string): Step[] {
   const steps: Step[] = [];
   try {
@@ -181,7 +225,7 @@ export function solveAbsolute(expr: string, variable: string): Step[] {
   }
 }
 
-// 🟡 Inequality
+// Inequality solver
 export function solveInequality(expr: string, variable: string): Step[] {
   const steps: Step[] = [];
   try {
@@ -199,7 +243,7 @@ export function solveInequality(expr: string, variable: string): Step[] {
   }
 }
 
-// 🟡 System
+// System of equations solver
 export function solveSystem(exprs: string[], variables: string[]): Step[] {
   const steps: Step[] = [];
   try {
@@ -222,7 +266,7 @@ export function solveSystem(exprs: string[], variables: string[]): Step[] {
   }
 }
 
-// 🟡 Generic
+// Generic equation solver
 export function solveGeneric(expr: string, variable: string): Step[] {
   const steps: Step[] = [];
   try {
