@@ -14,16 +14,9 @@ import { Picker } from "@react-native-picker/picker";
 import MathJax from "react-native-mathjax-html-to-svg";
 
 import {
-  solveLinear,
-  solveQuadratic,
-  solvePolynomial,
-  solveRational,
-  solveAbsolute,
-  solveInequality,
-  solveSystem,
-  solveGeneric,
-  classifyEquation,
+  solveEquation,
   Step,
+  getSupportedVariables,
 } from "../../src/lib/stepEngine";
 
 import { normalizeExpr } from "../../src/lib/ocrCleanup";
@@ -34,41 +27,35 @@ export default function AlgebraSolver() {
   const [solveFor, setSolveFor] = useState(variable || "x");
   const [steps, setSteps] = useState<Step[]>([]);
   const [answer, setAnswer] = useState("");
+  const supportedVariables = getSupportedVariables();
 
   useEffect(() => {
-    if (variable) setSolveFor(variable);
-  }, [variable]);
+    if (variable && supportedVariables.includes(variable)) {
+      setSolveFor(variable);
+    }
+  }, [variable, supportedVariables]);
 
   const handleSolve = async () => {
+    if (!expression.trim()) {
+      setSteps([{ type: "final", text: "⚠️ Please enter an equation." }]);
+      setAnswer("");
+      return;
+    }
     try {
       const cleanInput = normalizeExpr(expression);
-      const { type } = classifyEquation(cleanInput);
-      let s: Step[] = [];
+      const { steps: solveSteps, answer: finalAnswer } = solveEquation(cleanInput, solveFor);
 
-      if (type === "linear") s = solveLinear(cleanInput, solveFor);
-      else if (type === "quadratic") s = solveQuadratic(cleanInput, solveFor);
-      else if (type === "polynomial") s = solvePolynomial(cleanInput, solveFor);
-      else if (type === "rational") s = solveRational(cleanInput, solveFor);
-      else if (type === "absolute") s = solveAbsolute(cleanInput, solveFor);
-      else if (type === "inequality") s = solveInequality(cleanInput, solveFor);
-      else if (type === "system") {
-        const eqns = cleanInput.split(";");
-        s = solveSystem(eqns, [solveFor]);
-      } else {
-        s = solveGeneric(cleanInput, solveFor);
-      }
-
-      setSteps(s);
-      const final = s.find((st) => st.type === "final");
-      if (final) {
-        setAnswer(final.text);
+      setSteps(solveSteps);
+      setAnswer(finalAnswer || "");
+      if (finalAnswer) {
         await AsyncStorage.setItem(
           "algebra:lastResult",
-          JSON.stringify({ expression, solveFor, answer: final.text })
+          JSON.stringify({ expression, solveFor, answer: finalAnswer })
         );
       }
     } catch (err: any) {
       setSteps([{ type: "final", text: `⚠️ Error: ${err.message}` }]);
+      setAnswer("");
     }
   };
 
@@ -87,6 +74,8 @@ export default function AlgebraSolver() {
         value={expression}
         onChangeText={setExpression}
         multiline
+        autoCapitalize="none"
+        autoCorrect={false}
       />
       <Text style={styles.label}>Solve for:</Text>
       <Picker
@@ -94,9 +83,9 @@ export default function AlgebraSolver() {
         onValueChange={(itemValue) => setSolveFor(itemValue)}
         style={styles.picker}
       >
-        <Picker.Item label="x" value="x" />
-        <Picker.Item label="y" value="y" />
-        <Picker.Item label="z" value="z" />
+        {supportedVariables.map((v) => (
+          <Picker.Item key={v} label={v} value={v} />
+        ))}
       </Picker>
       <Pressable style={styles.button} onPress={handleSolve}>
         <Text style={styles.buttonText}>SOLVE</Text>
