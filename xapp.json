@@ -1,0 +1,65 @@
+{
+  "expo": {
+    "name": "Sam Sudoku",
+    "slug": "sam-sudoku",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "scheme": "sweirki",
+    "icon": "./assets/icon.png",
+
+    "splash": {
+      "image": "./assets/splash.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#ffffff"
+    },
+
+    "assetBundlePatterns": ["**/*"],
+
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.gamesworld.samsudoko",
+      "buildNumber": "1"
+    },
+
+    "android": {
+      "versionCode": 1,
+      "package": "com.gamesworld.samsudoko",
+      "permissions": [
+        "android.permission.CAMERA",
+        "android.permission.RECORD_AUDIO",
+        "android.permission.MODIFY_AUDIO_SETTINGS",
+        "android.permission.VIBRATE"
+      ],
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/icon.png",
+        "backgroundColor": "#e6f0ff"
+      }
+    },
+
+    "web": {
+      "favicon": "./assets/icon.png"
+    },
+
+    "plugins": [
+      "expo-audio",
+      "expo-video",
+      "expo-font",
+      "expo-web-browser",
+      [
+        "react-native-google-mobile-ads",
+        {
+          "androidAppId": "ca-app-pub-9603430285076746~3724641130",
+          "iosAppId": "ca-app-pub-9603430285076746~1458002511",
+          "delayAppMeasurementInit": true
+        }
+      ],
+      "expo-router"
+    ],
+
+    "extra": {
+      "eas": {
+        "projectId": "2994f2ef-f658-4c89-82ab-e528df950662"
+      }
+    }
+  }
+}

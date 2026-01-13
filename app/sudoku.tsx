@@ -1,0 +1,1469 @@
+import React, { useState, useEffect, useRef } from "react";
+import { calculateScore } from "../ladder";
+import * as Haptics from "expo-haptics";
+import { generateKillerCages } from "../utils/sudokuGen";
+import { auth } from "../firebase"; // check if logged in
+import AsyncStorage from "@react-native-async-storage/async-storage";
+import { recordGameResult } from "../src/analytics/playerAnalytics";
+
+import {
+  View,
+  Text,
+  StyleSheet,
+  Dimensions,
+  TouchableOpacity,
+  Modal,
+  Animated,
+  ImageBackground,
+  Platform,
+} from "react-native";
+import { useAchievementsStore } from "./stores/useAchievementsStore";
+import { useRouter } from "expo-router";
+import { saveGame, loadGame, clearGame } from "../utils/storageUtils";
+import { useLocalSearchParams } from "expo-router";
+import { Alert } from "react-native";
+import { getCurrentStreak } from "../utils/ladder/scoreEngine"; // âœ… NEW
+import { checkAchievements } from "../utils/ladder/scoreEngine"; // âœ… FIX
+import { db } from "../firebase";
+import { collection, addDoc, serverTimestamp } from "firebase/firestore";
+import { saveWin } from "../src/lib/saveWin";
+
+import { Ionicons } from "@expo/vector-icons";
+import SudokuCell from './components/SudokuCell';
+import WinModal from "./components/WinModal";
+import Controls from "./components/Controls";
+import NumberPad from "./components/NumberPad";
+import UniversalModal from "./components/UniversalModal";  // ⭐ ADD THIS
+import RankUpPopup from "./components/RankUpPopup";   // this goes at the top with imports
+import { generateSudoku, validateCages } from "../utils/sudokuGen";
+import MenuButton from "./components/MenuButton";
+import { getColors } from "./theme/index";
+import { useFocusEffect } from "@react-navigation/native";
+import { useCallback } from "react";
+import { calculateXpForLadder } from "../utils/ladder/scoreEngine";
+import { awardLadderXP, refreshLadderData } from "./lib/ladderBridge";
+
+
+
+const SCREEN = Dimensions.get("window");
+const width = SCREEN.width;                   
+const BOARD_SIZE = width - 40;   // always square based on width only
+const CELL_SIZE = BOARD_SIZE / 9;
+interface SudokuProps {
+  onWin?: (result: {
+    difficulty: string;
+    time: number;
+    hints: number;
+    undos: number;
+    score: number;
+    user: string;
+  }) => void;
+  isDaily?: boolean;
+  onDailyWin?: (result: any) => void;
+  initialPuzzle?: any;
+}
+
+
+export default function SudokuScreen(
+  { onWin, isDaily: isDailyProp = false, onDailyWin, initialPuzzle }: SudokuProps
+)
+{
+ const unlockAchievement = useAchievementsStore((s) => s.unlock);
+ 
+  const { mode } = useLocalSearchParams<{ mode?: string }>();
+  const isDaily = mode === "daily" || isDailyProp;
+
+
+
+   // THEME MUST BE SYNC
+const colors = getColors();
+
+
+  const s = styles(colors); // dynamic stylesheet
+  const router = useRouter();
+   const [winVisible, setWinVisible] = useState(false);
+   const [showOnboarding, setShowOnboarding] = useState(false);
+ // ---------- State ----------
+const [puzzle, setPuzzle] = useState<any | null>(initialPuzzle ?? null);
+useEffect(() => {
+  if (isDaily && initialPuzzle && !puzzle) {
+    setPuzzle(initialPuzzle);
+  }
+}, [isDaily, initialPuzzle]);
+
+  const [score, setScore] = useState<number | null>(null);
+ const [initialSnapshot, setInitialSnapshot] = useState<any | null>(
+  puzzle ? JSON.parse(JSON.stringify(puzzle)) : null
+);
+
+  const [selected, setSelected] = useState<[number, number] | null>(null);
+ const [resumeVisible, setResumeVisible] = useState(false);
+const [resumeData, setResumeData] = useState<any | null>(null);
+const [invalidGridVisible, setInvalidGridVisible] = useState(false);
+  const { level } = useLocalSearchParams<{ level?: string }>();
+  // Initialize puzzle AFTER level is known
+useEffect(() => {
+  if (!puzzle && !isDaily) {
+    const diff =
+      level === "easy" || level === "medium" || level === "hard"
+        ? level
+        : "easy";
+
+    setPuzzle(generateSudoku(diff));
+  }
+}, [level, isDaily]);
+
+
+  const [history, setHistory] = useState<any[]>([]);
+  const [redoStack, setRedoStack] = useState<any[]>([]);
+  const [username, setUsername] = useState("Guest");
+  // âœ… Killer Sudoku support
+const [cages, setCages] = useState<any[]>([]);
+
+  useEffect(() => {
+    AsyncStorage.getItem("username").then((name) => {
+      if (name) setUsername(name);
+    });
+  }, []);
+// ⭐ Phase 10 — Classic onboarding (one-time)
+useEffect(() => {
+  let alive = true;
+
+  (async () => {
+    try {
+      const seen = await AsyncStorage.getItem("onboarded:classic");
+      if (!seen && alive) {
+        setShowOnboarding(true);
+
+        setTimeout(() => {
+          if (!alive) return;
+          setShowOnboarding(false);
+          AsyncStorage.setItem("onboarded:classic", "1");
+        }, 3000);
+      }
+    } catch {}
+  })();
+
+  return () => {
+    alive = false;
+  };
+}, []);
+
+  const [gameWon, setGameWon] = useState(false);
+  const [hintsLeft, setHintsLeft] = useState(3);
+  const [errorCount, setErrorCount] = useState(0);
+  const [time, setTime] = useState(0);
+  const [digitCounts, setDigitCounts] = useState<number[]>(Array(10).fill(0));
+  const [drawerVisible, setDrawerVisible] = useState(false);
+  const [showMenu, setShowMenu] = useState(false);
+const [difficulty, setDifficulty] = useState(
+  isDaily ? "medium" : level?.toString() || "easy"
+);
+
+  const [pendingDifficulty, setPendingDifficulty] = useState<string | null>(null);
+  const [confirmVisible, setConfirmVisible] = useState(false);
+ 
+  const [hasWon, setHasWon] = useState(false);
+  const [highlightDigit, setHighlightDigit] = useState<number | null>(null);
+  const [isPencilMode, setIsPencilMode] = useState(false);
+
+
+// Game Over popup logic (must be before return, inside hook zone)
+const [gameOverVisible, setGameOverVisible] = useState(false);
+const gameOverShown = useRef(false);
+
+useEffect(() => {
+  if (errorCount >= 4 && !gameOverShown.current) {
+    gameOverShown.current = true;
+    setGameOverVisible(true);
+  }
+}, [errorCount]);
+useEffect(() => {
+  if (isDaily) return;
+  if (resumeVisible) return; // ✅ DO NOT restart during resume
+  if (level) {
+    handleRestart(level.toString());
+  }
+}, [level, isDaily, resumeVisible]);
+
+  const [blinkCells, setBlinkCells] = useState<[number, number][]>([]);
+  const [contextCells, setContextCells] = useState<[number, number][]>([]);
+  const blinkAnim = useRef(new Animated.Value(1)).current;
+
+ const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+const loginRedirectTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+const postWinTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+const drawerAnim = useRef(new Animated.Value(300)).current;
+const winHandledRef = useRef(false);
+
+// ✅ AUTO-RESUME (CLASSIC ONLY) — refresh on every focus
+useFocusEffect(
+  useCallback(() => {
+    if (isDaily) return;
+
+    let alive = true;
+
+    (async () => {
+      try {
+        const saved = await loadGame("classic");
+
+        if (
+          alive &&
+          saved &&
+          Array.isArray(saved.puzzle) &&
+          saved.puzzle.length === 9
+        ) {
+          setResumeData(saved);       // ✅ always latest save
+          setResumeVisible(true);
+        }
+      } catch {}
+    })();
+
+    return () => {
+      alive = false;
+    };
+  }, [isDaily])
+);
+// ✅ Save on leave (so timer updates even if you just leave without entering a number)
+useFocusEffect(
+  useCallback(() => {
+    return () => {
+      if (isDaily) return;
+      if (!puzzle) return;
+      if (winVisible) return;
+
+      saveGame("classic", {
+        puzzle,
+        solution: puzzle.map((r: any) => r.map((c: any) => c.solution)),
+        timer: time,
+        hintsLeft,
+        difficulty,
+        errors: errorCount,
+        errorCount,
+      });
+    };
+  }, [isDaily, puzzle, winVisible, time, hintsLeft, difficulty, errorCount])
+);
+
+
+
+
+ // ---------- Effects ----------
+useEffect(() => {
+  if (!resumeVisible) {
+    startTimer();
+  }
+
+  if (puzzle) {
+    updateDigitCounts(puzzle);
+  }
+
+  return () => {
+    if (timerRef.current) {
+      clearInterval(timerRef.current);
+      timerRef.current = null;
+    }
+
+    if (postWinTimeoutRef.current) {
+      clearTimeout(postWinTimeoutRef.current);
+      postWinTimeoutRef.current = null;
+    }
+
+    if (loginRedirectTimeoutRef.current) {
+      clearTimeout(loginRedirectTimeoutRef.current);
+      loginRedirectTimeoutRef.current = null;
+    }
+  };
+}, [resumeVisible]);
+
+
+ 
+  // ---------- Timer ----------
+  const startTimer = () => {
+   if (timerRef.current) {
+  clearInterval(timerRef.current);
+}
+
+    timerRef.current = setInterval(() => setTime((t) => t + 1), 1000);
+  };
+  const formatTime = (t: number) => {
+    const m = Math.floor(t / 60);
+    const s = t % 60;
+    return `${m}:${s < 10 ? "0" : ""}${s}`;
+  };
+
+  // ---------- Helpers ----------
+  const updateDigitCounts = (board: any[][]) => {
+    const counts = Array(10).fill(0);
+    board.forEach((row) =>
+      row.forEach((cell) => {
+        if (cell.value) counts[cell.value]++;
+      })
+    );
+    setDigitCounts(counts);
+  };
+
+  // ---------- Placement ----------
+  const handleSelectNumber = (num: number) => {
+  if (gameWon) return;   // ⭐ STOP NUMBER PLACEMENT ONLY ON FULL WIN
+
+    if (!selected) return;
+    const [r, c] = selected;
+
+
+    // Pencil mode first
+if (isPencilMode) {
+  toggleCandidate(r, c, num);
+  try { Haptics.selectionAsync(); } catch {}
+  return; // skip normal number placement
+}
+
+
+    if (puzzle[r][c].prefilled) return;
+
+setHistory([...history, JSON.parse(JSON.stringify(puzzle))]);
+
+const newPuzzle = puzzle.map((row, ri) =>
+  row.map((cell, ci) =>
+    ri === r && ci === c ? { ...cell, value: num } : cell
+  )
+);
+
+// ⭐ FIRST UPDATE THE UI
+setPuzzle(newPuzzle);
+setRedoStack([]);
+updateDigitCounts(newPuzzle);
+
+// ⭐ THEN SAVE TO STORAGE
+if (!isDaily) {
+  saveGame("classic", {
+  puzzle: newPuzzle,
+  solution: newPuzzle.map(r => r.map(c => c.solution)),
+  timer: time,
+  hintsLeft: hintsLeft,
+  difficulty: difficulty,
+  errors:
+    num !== puzzle[r][c].solution
+      ? errorCount + 1
+      : errorCount,
+  errorCount:
+    num !== puzzle[r][c].solution
+      ? errorCount + 1
+      : errorCount,
+});
+
+
+}
+
+
+    //Killer cage live validation
+if (level === "killer") {
+  try {
+    const { valid, errors } = validateCages(newPuzzle, cages || []);
+    if (!valid && errors.length > 0) {
+      const bad = errors[0];
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+    }
+  } catch (e) {
+  }
+}
+   // ---------- Strike counter ----------
+if (num !== puzzle[r][c].solution) {
+  setErrorCount((prev) => prev + 1);
+  Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+} else {
+  Haptics.selectionAsync(); //light click for correct entry
+}
+
+
+    // ---------- Blink check ----------
+    let blinkTargets: [number, number][] = [];
+
+    if (newPuzzle[r].every((c) => c.value === c.solution)) {
+      blinkTargets = blinkTargets.concat(newPuzzle[r].map((_, ci) => [r, ci]));
+    }
+    if (newPuzzle.every((row) => row[c].value === row[c].solution)) {
+      blinkTargets = blinkTargets.concat(newPuzzle.map((_, ri) => [ri, c]));
+    }
+    const boxRow = Math.floor(r / 3);
+    const boxCol = Math.floor(c / 3);
+    let boxCells: [number, number][] = [];
+    for (let rr = boxRow * 3; rr < boxRow * 3 + 3; rr++) {
+      for (let cc = boxCol * 3; cc < boxCol * 3 + 3; cc++) {
+        boxCells.push([rr, cc]);
+      }
+    }
+    if (boxCells.every(([rr, cc]) => newPuzzle[rr][cc].value === newPuzzle[rr][cc].solution)) {
+      blinkTargets = blinkTargets.concat(boxCells);
+    }
+
+    if (blinkTargets.length > 0) {
+      triggerBlink(blinkTargets);
+    }
+
+  // Win check
+const won = newPuzzle.every((row) => row.every((cell) => cell.value === cell.solution));
+if (won && !gameWon && !winHandledRef.current) {
+  setGameWon(true);
+  setErrorCount(0);
+  handleWin();
+}
+
+  };
+
+  const handleCellPress = (row: number, col: number, cell: any) => {
+    setSelected([row, col]);
+    if (cell.value) setHighlightDigit(cell.value);
+
+    // ---------- Context highlight ----------
+    let context: [number, number][] = [];
+    context = context.concat(puzzle[row].map((_, ci) => [row, ci]));
+    context = context.concat(puzzle.map((_, ri) => [ri, col]));
+
+    const boxRow = Math.floor(row / 3);
+    const boxCol = Math.floor(col / 3);
+    for (let rr = boxRow * 3; rr < boxRow * 3 + 3; rr++) {
+      for (let cc = boxCol * 3; cc < boxCol * 3 + 3; cc++) {
+        context.push([rr, cc]);
+      }
+    }
+    setContextCells(context);
+  };
+// ---------- Pencil helpers ----------
+const toggleCandidate = (r: number, c: number, num: number) => {
+  const next = JSON.parse(JSON.stringify(puzzle));
+  if (!Array.isArray(next[r][c].notes)) next[r][c].notes = [];
+  const idx = next[r][c].notes.indexOf(num);
+  if (idx === -1) next[r][c].notes.push(num);
+  else next[r][c].notes.splice(idx, 1);
+  setPuzzle(next);
+ if (!isDaily) {
+ saveGame("classic", {
+  puzzle: next,
+  solution: next.map(r => r.map(c => c.solution)),
+  timer: time,
+  hintsLeft,
+  difficulty,
+  errors: errorCount,
+  errorCount: errorCount,
+});
+
+
+}
+
+
+};
+
+  // ---------- Undo/Redo/Delete/Hints/AutoSolve/Restart ----------
+  const handleUndo = () => {
+    if (gameWon || winVisible) return;   // ⭐ STOP UNDO AFTER WIN
+
+    if (history.length === 0) return;
+    const prev = history[history.length - 1];
+    setRedoStack([JSON.parse(JSON.stringify(puzzle)), ...redoStack]);
+    setPuzzle(prev);
+    setHistory(history.slice(0, -1));
+    updateDigitCounts(prev);
+  };
+
+  const handleRedo = () => {
+    if (gameWon || winVisible) return;   // ⭐ STOP REDO AFTER WIN
+
+    if (redoStack.length === 0) return;
+    const next = redoStack[0];
+    setHistory([...history, JSON.parse(JSON.stringify(puzzle))]);
+    setPuzzle(next);
+    setRedoStack(redoStack.slice(1));
+    updateDigitCounts(next);
+  };
+
+  const handleDelete = () => {
+    if (gameWon || winVisible) return;   // ⭐ STOP DELETE AFTER WIN
+    if (!selected) return;
+    const [r, c] = selected;
+  if (puzzle[r][c].prefilled === true) return;
+
+
+    const newPuzzle = puzzle.map((row, ri) =>
+      row.map((cell, ci) => (ri === r && ci === c ? { ...cell, value: null } : cell))
+    );
+
+    setHistory([...history, JSON.parse(JSON.stringify(puzzle))]);
+    setRedoStack([]);
+    setPuzzle(newPuzzle);
+    updateDigitCounts(newPuzzle);
+
+    const won = newPuzzle.every((row) => row.every((cell) => cell.value === cell.solution));
+   if (won && !gameWon && !winHandledRef.current) {
+  setGameWon(true);
+  handleWin();
+}
+
+  };
+
+  const handleHint = () => {
+    if (gameWon || winVisible) return;   // ⭐ STOP HINT AFTER WIN
+    if (!selected || hintsLeft <= 0) return;
+    const [r, c] = selected;
+    if (puzzle[r][c].prefilled) return;
+
+    const solution = puzzle[r][c].solution;
+    const newPuzzle = puzzle.map((row, ri) =>
+      row.map((cell, ci) => (ri === r && ci === c ? { ...cell, value: solution } : cell))
+    );
+
+     setHistory([...history, JSON.parse(JSON.stringify(puzzle))]);
+  setRedoStack([]);
+  setPuzzle(newPuzzle);
+  setHintsLeft(hintsLeft - 1);
+if (!isDaily) {
+
+saveGame("classic", {
+  puzzle: newPuzzle,
+  solution: newPuzzle.map((row) => row.map((cell: any) => cell.solution)),
+  timer: time,
+  hintsLeft: hintsLeft - 1,
+  difficulty,
+  errors: errorCount,
+  errorCount: errorCount,
+});
+
+
+}
+ updateDigitCounts(newPuzzle);
+const won = newPuzzle.every(
+  (row: any[]) => row.every((cell: any) => cell.value === cell.solution)
+)
+
+if (won && !gameWon && !winHandledRef.current) {
+  setGameWon(true);
+  handleWin();
+}
+
+  };
+
+ const handleAutoSolve = () => {
+  if (gameWon || winVisible || winHandledRef.current) return;
+
+  const solved = puzzle.map((row) =>
+    row.map((cell) => ({ ...cell, value: cell.solution }))
+  );
+
+  setPuzzle(JSON.parse(JSON.stringify(solved)));
+  updateDigitCounts(solved);
+
+  if (!winHandledRef.current) {
+    setGameWon(true);
+    handleWin();
+  }
+};
+
+
+  const handleRestart = (levelInput: any = difficulty) => {
+    if (isDaily) return;
+    winHandledRef.current = false;
+
+    setGameWon(false);
+    setHasWon(false);  //ensures stats reset even if you closed WinModal
+  setErrorCount(0); // immediate reset to avoid carry-over
+
+    const level = typeof levelInput === "string" ? levelInput : difficulty;
+    setDifficulty(level);
+AsyncStorage.removeItem("activeGame"); // clear old autosave
+    const newBoard = generateSudoku(level);
+    if (level === "killer") {
+  const solution = newBoard.map(r => r.map(c => c.solution));
+ setCages(generateKillerCages(solution));
+}
+
+    setPuzzle(JSON.parse(JSON.stringify(newBoard)));
+    setInitialSnapshot(JSON.parse(JSON.stringify(newBoard)));
+    setHistory([]);
+    setRedoStack([]);
+    updateDigitCounts(newBoard);
+    setHintsLeft(level === "easy" ? 3 : level === "medium" ? 2 : 1);
+    setWinVisible(false);
+    setTime(0);
+    startTimer();
+    setErrorCount(0);
+  };
+
+const handleWin = async () => {
+  if (winHandledRef.current) return;
+  winHandledRef.current = true;
+
+ if (timerRef.current) {
+  clearInterval(timerRef.current);
+}
+
+
+  blinkAnim.stopAnimation();
+  setBlinkCells([]);
+
+ setWinVisible(true);
+
+if (isDaily) {
+  setWinVisible(true);
+
+  if (onDailyWin) {
+    onDailyWin({
+      user: username,
+      difficulty,
+      time,
+      errors: errorCount,
+      points: calculateScore({
+        difficulty,
+        time,
+        hints: 3 - hintsLeft,
+        undos: history.length,
+        errors: errorCount,
+        streak: 0,
+      }),
+    });
+  }
+
+  return;
+}
+
+  // ✅ NON-DAILY FLOW
+  try {
+    Haptics.notificationAsync(
+      Haptics.NotificationFeedbackType.Success
+    );
+  } catch {}
+
+ postWinTimeoutRef.current = setTimeout(async () => {
+  try {
+    const xp = calculateXpForLadder({
+      mode: "classic",
+      difficulty,
+      time,
+      errors: errorCount,
+    });
+
+    await awardLadderXP(xp);
+    await refreshLadderData(username);
+
+    const newScore = calculateScore({
+      difficulty,
+      time,
+      hints: 3 - hintsLeft,
+      undos: history.length,
+      errors: errorCount,
+      streak: await getCurrentStreak(username),
+    });
+
+    const achievements = checkAchievements({
+      difficulty,
+      time,
+      totalGames: (history.length || 0) + 1,
+      streak: await getCurrentStreak(username),
+    });
+
+    if (Array.isArray(achievements)) {
+      achievements.forEach(unlockAchievement);
+    }
+
+    setScore(newScore);
+
+    await saveWin(
+      username || "Guest",
+      difficulty,
+      time,
+      errorCount,
+      false
+    );
+
+// 📊 Phase 8A — record Classic analytics (canonical, non-blocking)
+recordGameResult({
+  username: auth.currentUser?.uid,
+  mode: "classic",
+  win: true,
+  timeSec: time,
+  errors: errorCount,
+  hintsUsed: 3 - hintsLeft,
+});
+
+
+
+// ⭐ Phase 8E — increment games played (total + classic)
+try {
+  const totalRaw = await AsyncStorage.getItem("gamesPlayed:total");
+  const classicRaw = await AsyncStorage.getItem("gamesPlayed:classic");
+
+  const total = totalRaw ? Number(totalRaw) : 0;
+  const classic = classicRaw ? Number(classicRaw) : 0;
+
+  await AsyncStorage.multiSet([
+    ["gamesPlayed:total", String(total + 1)],
+    ["gamesPlayed:classic", String(classic + 1)],
+  ]);
+} catch {
+  // silent fail
+}
+  } catch (err) {
+    // silent fail
+  }
+}, 0);
+};
+const handleGameOverClose = async () => {
+  // 1️⃣ Stop timer
+  if (timerRef.current) {
+    clearInterval(timerRef.current);
+    timerRef.current = null;
+  }
+
+  // 2️⃣ Clear saved game
+  await clearGame("classic");
+
+  // 3️⃣ Clear board + state
+  setPuzzle(null);
+  setHistory([]);
+  setRedoStack([]);
+  setSelected(null);
+  setHighlightDigit(null);
+  setContextCells([]);
+  setBlinkCells([]);
+
+  setGameWon(false);
+  setHasWon(false);
+  setWinVisible(false);
+
+  // 4️⃣ Reset loss state
+  setErrorCount(0);
+  gameOverShown.current = false;
+
+  // 5️⃣ Close modal
+  setGameOverVisible(false);
+
+  // 6️⃣ Navigate to Variant screen
+ router.replace("/variantHub");
+};
+
+  // ---------- Drawer Animation ----------
+
+  function toggleDrawer(show: boolean) {
+    if (show) setDrawerVisible(true);
+
+    Animated.timing(drawerAnim, {
+      toValue: show ? 0 : 300,
+      duration: 250,
+      useNativeDriver: true,
+    }).start(() => {
+      if (!show) setDrawerVisible(false);
+    });
+  }
+
+
+
+  function triggerBlink(cells: [number, number][]) {
+    setBlinkCells(cells);
+    Animated.sequence([
+      Animated.timing(blinkAnim, { toValue: 0.3, duration: 200, useNativeDriver: true }),
+      Animated.timing(blinkAnim, { toValue: 1, duration: 200, useNativeDriver: true }),
+      Animated.timing(blinkAnim, { toValue: 0.3, duration: 200, useNativeDriver: true }),
+      Animated.timing(blinkAnim, { toValue: 1, duration: 200, useNativeDriver: true }),
+    ]).start(() => setBlinkCells([]));
+  }
+
+  // ---------- Drawer button style ----------
+const drawerBtn = {
+  width: "100%",
+  paddingVertical: 8,
+  borderWidth: 2,
+  borderColor: colors.gold,
+  borderRadius: 10,
+  marginBottom: 8,
+  alignItems: "center",
+};
+
+const drawerBtnText = {
+  color: colors.gold,
+  fontSize: 14,
+  fontWeight: "600",
+};
+
+// ---------- Render ----------
+const controlsLocked = gameWon || gameOverVisible;
+// Prevent rendering until puzzle is initialized
+if (!puzzle) {
+  return (
+    <View style={{ flex: 1, justifyContent: "center", alignItems: "center" }}>
+      <Text style={{ color: colors.buttonPrimaryBg, fontWeight: "700" }}>
+        Loading…
+      </Text>
+    </View>
+  );
+}
+return (
+  <View style={{ flex: 1 }}>
+    {showOnboarding && !isDaily && (
+  <View
+    pointerEvents="none"
+    style={{
+      position: "absolute",
+      top: 0,
+      left: 0,
+      right: 0,
+      bottom: 0,
+      justifyContent: "center",
+      alignItems: "center",
+      zIndex: 50,
+    }}
+  >
+    <View
+      style={{
+        backgroundColor: "rgba(20,20,20,0.92)",
+        paddingVertical: 14,
+        paddingHorizontal: 18,
+        borderRadius: 16,
+        maxWidth: "85%",
+        shadowColor: "#000",
+        shadowOpacity: 0.25,
+        shadowRadius: 12,
+        elevation: 6,
+      }}
+    >
+      <Text
+        style={{
+          fontSize: 14,
+          color: "#F5E6A8", // soft gold, theme-aligned
+          textAlign: "center",
+          fontWeight: "600",
+          lineHeight: 20,
+        }}
+      >
+        Complete the grid so every row, column, and box contains 1–9.
+      </Text>
+    </View>
+  </View>
+)}
+
+  <ImageBackground
+  source={require("../assets/bg.png")}
+  style={s.bg}
+blurRadius={Platform.OS === "android" ? 0 : (winVisible ? 0 : 5)}
+  resizeMode="cover"
+>
+
+  <Text
+  style={{
+    fontSize: 22,
+    fontWeight: "800",
+    color: colors.buttonSecondaryBg,
+    textAlign: "center",
+    marginBottom: 4,
+  }}
+>
+  {isDaily ? "Daily Challenge" : "Classic Sudoku"}
+</Text>
+
+
+
+
+      {/* Top Bar */}
+            {/* Top Bar (no card background) */}
+      <View style={s.headerRow}>
+        <View style={{ flex: 1, alignItems: "flex-start" }}>
+          <Text style={s.timer}>{formatTime(time)}</Text>
+        </View>
+
+       <View style={{ flex: 1, alignItems: "center" }}>
+  {!isDaily && (
+    <TouchableOpacity
+      style={{ flexDirection: "row", alignItems: "center" }}
+      onPress={() => setShowMenu(true)}
+    >
+      <Text style={s.difficulty}>{difficulty}</Text>
+      <Text style={s.difficulty}> </Text>
+    </TouchableOpacity>
+  )}
+</View>
+
+
+        <View style={{ flex: 1, alignItems: "flex-end" }}>
+          <TouchableOpacity
+  onPress={() => {
+    if (winVisible) return; // PHASE 5B FIX
+    toggleDrawer(true);
+  }}
+  style={{ padding: 4 }}
+>
+
+        {/* GOLD ICON */}
+<Ionicons name="menu" size={32} color={colors.buttonSecondaryBg} />
+
+
+          </TouchableOpacity>
+        </View>
+      </View>
+  {/* Strike Counter */}
+<View style={s.strikeTop}>
+  <Text style={s.strikeTopText}>
+  Strikes: {errorCount} / 4
+</Text>
+
+</View>
+
+
+<View style={[s.board, winVisible && { opacity: 0.35 }]}>
+  {puzzle.map((row, ri) => (
+    <View key={ri} style={s.row}>
+      {row.map((cell, ci) => (
+        <SudokuCell
+          key={`${ri}-${ci}`}
+          cell={cell}
+          row={ri}
+          col={ci}
+          isSelected={selected && selected[0] === ri && selected[1] === ci}
+          isHighlighted={highlightDigit !== null && cell.value === highlightDigit}
+          isContext={contextCells.some(([r, c]) => r === ri && c === ci)}
+          isWrong={cell.value && cell.value !== cell.solution && !cell.prefilled}
+          blinkCells={blinkCells}
+          blinkAnim={blinkAnim}
+          onPress={() => {
+            if (winVisible) return; // 🔒 lock board
+            handleCellPress(ri, ci, cell);
+          }}
+        />
+      ))}
+    </View>
+  ))}
+</View>
+
+      {/* Win Modal */}
+ {!winVisible && (
+  <>
+    {/* Controls */}
+    <View style={{ height: 90, marginBottom: 4 }}>
+      <Controls
+        onUndo={handleUndo}
+        onRedo={handleRedo}
+        onHint={handleHint}
+        onDelete={handleDelete}
+        onRestart={handleRestart}
+        onSolve={handleAutoSolve}
+        hintsLeft={hintsLeft}
+        pencilMode={isPencilMode}
+        onTogglePencil={() => setIsPencilMode((p) => !p)}
+        disableUndo={history.length === 0}
+        disableRedo={redoStack.length === 0}
+        locked={controlsLocked}
+      />
+    </View>
+
+    {/* Number Pad */}
+    <NumberPad
+      disabledNumbers={digitCounts
+        .map((count, num) => (count >= 9 ? num : null))
+        .filter((n): n is number => n !== null)
+
+      }
+      onNumberPress={handleSelectNumber}
+    />
+  </>
+)}
+
+
+        </ImageBackground>
+
+        {/* ---------------- RIGHT SIDE DRAWER ---------------- */}
+{drawerVisible && !winVisible && (
+  <Modal visible transparent animationType="fade">
+    <View
+      style={{
+        flex: 1,
+        backgroundColor: "rgba(0,0,0,0.55)", // dim behind
+        justifyContent: "center",
+        alignItems: "center",
+      }}
+    >
+
+      {/* DRAWER CARD */}
+      <Animated.View
+        style={{
+          width: "78%",
+          backgroundColor: colors.card,
+          borderRadius: 24,
+          paddingTop: 32,
+          paddingBottom: 26,
+          paddingHorizontal: 24,
+          alignItems: "center",
+          transform: [{ translateX: drawerAnim }],
+        }}
+      >
+
+        {/* TITLE */}
+        <Text
+          style={{
+            fontSize: 22,
+            fontWeight: "800",
+            color: colors.enteredNumber,
+            marginBottom: 16,
+          }}
+        >
+          Menu
+        </Text>
+
+        {/* USER ICON */}
+        <Ionicons
+          name="person-circle"
+          size={72}
+          color={colors.enteredNumber}
+          style={{ marginBottom: 6 }}
+        />
+
+        {/* USER NAME */}
+        <Text
+          style={{
+            fontSize: 18,
+            fontWeight: "700",
+            marginBottom: 24,
+            color: colors.enteredNumber,
+          }}
+        >
+          {username}
+        </Text>
+
+        {/* BUTTONS */}
+        <TouchableOpacity
+          style={s.drawerBtn}
+          onPress={() => {
+            toggleDrawer(false);
+            router.push("/profile");
+          }}
+        >
+          <Text style={s.drawerBtnText}>Profile</Text>
+        </TouchableOpacity>
+
+        <TouchableOpacity
+          style={s.drawerBtn}
+          onPress={() => {
+            toggleDrawer(false);
+            router.push("/stats");
+          }}
+        >
+          <Text style={s.drawerBtnText}>Stats</Text>
+        </TouchableOpacity>
+
+        <TouchableOpacity
+          style={s.drawerBtn}
+          onPress={() => {
+            toggleDrawer(false);
+            router.push("/settings");
+          }}
+        >
+          <Text style={s.drawerBtnText}>Settings</Text>
+        </TouchableOpacity>
+
+        <TouchableOpacity
+          style={s.drawerBtn}
+          onPress={() => {
+            toggleDrawer(false);
+            router.push("/leaderboard");
+          }}
+        >
+          <Text style={s.drawerBtnText}>Leaderboard</Text>
+        </TouchableOpacity>
+
+        <TouchableOpacity
+          style={[s.drawerBtn, { marginTop: 8 }]}
+          onPress={() => toggleDrawer(false)}
+        >
+          <Text style={s.drawerBtnText}>Close</Text>
+        </TouchableOpacity>
+
+      </Animated.View>
+    </View>
+  </Modal>
+)}
+
+
+
+        {/* GAME OVER MODAL */}
+<UniversalModal
+  visible={gameOverVisible}
+  title="Game Over"
+  message={`You made ${errorCount} mistakes!`}
+  actions={[
+    {
+      label: "Play Again",
+      onPress: () => {
+        setGameOverVisible(false);
+        setErrorCount(0);
+        gameOverShown.current = false;
+        handleRestart(difficulty);
+      },
+    },
+   {
+  label: "Close",
+  onPress: handleGameOverClose,
+},
+
+  ]}
+/>
+
+{/* RESUME GAME MODAL 👇 PASTE THIS BLOCK */}
+<UniversalModal
+  visible={resumeVisible}
+  title="Resume Game?"
+  message="Would you like to continue your previous puzzle?"
+  actions={[
+{
+  label: "YES",
+  onPress: () => {
+    if (resumeData) {
+      const rebuilt = resumeData.puzzle.map((row: any[]) =>
+        row.map((cell: any) => ({
+          ...cell,
+          value: cell.value ?? null,
+          solution: cell.solution ?? 0,
+          prefilled: cell.prefilled === true,
+          notes: Array.isArray(cell.notes) ? cell.notes : [],
+        }))
+      );
+
+      setPuzzle(rebuilt);
+      setInitialSnapshot(JSON.parse(JSON.stringify(rebuilt)));
+
+      setHistory([]);
+      setRedoStack([]);
+
+      const computedErrors = rebuilt.flat().filter(
+        (cell: any) =>
+          cell.value &&
+          cell.value !== cell.solution &&
+          !cell.prefilled
+      ).length;
+
+      setErrorCount(computedErrors);
+
+      setHintsLeft(resumeData.hintsLeft ?? 3);
+      setTime(resumeData.timer ?? 0);
+      setDifficulty(resumeData.difficulty ?? "easy");
+      updateDigitCounts(rebuilt);
+    }
+
+    setResumeVisible(false);
+    startTimer();
+
+  },
+},
+
+
+
+  {
+  label: "NO",
+  onPress: async () => {
+    await clearGame("classic");
+    setResumeVisible(false);
+  },
+},
+
+  ]}
+/>
+
+
+
+      {/* Difficulty Modal */}
+     <UniversalModal
+ visible={showMenu && !isDaily}
+  title="Choose Difficulty"
+  actions={[
+    {
+      label: "EASY",
+      onPress: () => {
+        setPendingDifficulty("easy");
+        setShowMenu(false);
+        setConfirmVisible(true);
+      },
+    },
+    {
+      label: "MEDIUM",
+      onPress: () => {
+        setPendingDifficulty("medium");
+        setShowMenu(false);
+        setConfirmVisible(true);
+      },
+    },
+    {
+      label: "HARD",
+      onPress: () => {
+        setPendingDifficulty("hard");
+        setShowMenu(false);
+        setConfirmVisible(true);
+      },
+    },
+    { label: "Cancel", onPress: () => setShowMenu(false) },
+  ]}
+/>
+
+
+      {/* Confirmation Modal */}
+      <UniversalModal
+  visible={confirmVisible && !isDaily}
+  title={`Start a new ${pendingDifficulty?.toUpperCase()} game?`}
+  actions={[
+    {
+      label: "Yes, Start",
+    onPress: () => {
+  if (pendingDifficulty) {
+    handleRestart(pendingDifficulty); // ✅ this regenerates the board
+  }
+  setPendingDifficulty(null);
+  setConfirmVisible(false);
+},
+
+    },
+    { label: "Cancel", onPress: () => setConfirmVisible(false) },
+  ]}
+/>
+
+
+    {/* ✅ Win Modal only mounts when visible */}
+    {winVisible && (
+      <WinModal
+        visible={winVisible}
+        // stay on the same board, no navigation
+        onClose={async () => {
+          await clearGame("classic");
+          setWinVisible(false);
+        }}
+        // Restart the puzzle in place
+        onRestart={(level) => handleRestart(level)}
+        difficulty={difficulty}
+        isDaily={isDaily}
+      />
+    )}
+
+    {/* ✅ Ladder Rank-Up Popup */}
+    <RankUpPopup />
+  
+  </View>
+);
+}
+
+
+
+const styles = (colors: ReturnType<typeof getColors>) =>
+  StyleSheet.create({
+ button: {
+ backgroundColor: "transparent",          // white / themed base
+  paddingVertical: 10,
+  borderRadius: 16,
+  marginBottom: 8,
+  width: "80%",
+  alignItems: "center",
+
+  borderWidth: 2,                                  // gold outline
+  borderColor: colors.buttonSecondaryBg,
+
+  shadowColor: colors.buttonSecondaryBg,           // soft gold glow
+  shadowOffset: { width: 0, height: 2 },
+  shadowOpacity: 0.25,
+  shadowRadius: 5,
+  elevation: 4,
+},
+buttonText: {
+  color: colors.buttonSecondaryBg,                 // gold text
+  fontSize: 15,
+  fontWeight: "700",
+},
+
+drawerBtn: {
+  paddingVertical: 12,
+  paddingHorizontal: 16,
+},
+
+   bg: {
+  flex: 1,
+  resizeMode: "cover",
+ backgroundColor: "transparent",
+
+  justifyContent: "flex-start",
+  paddingTop: 20,
+  paddingBottom: 30,   // ⭐ ADD THIS
+},
+
+
+   headerRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    paddingHorizontal: 16,
+    paddingTop: 4,
+    paddingBottom: 4,
+    marginBottom: 4,
+    // no background, no radius, no shadow
+  },
+
+
+
+
+    timer: {
+      fontSize: 18,
+      fontWeight: "bold",
+      color: colors.buttonPrimaryBg, // light gold
+    },
+    difficulty: {
+      fontSize: 16,
+      fontWeight: "600",
+    color: colors.buttonPrimaryBg, // light gold
+
+    },
+   board: {
+  width: BOARD_SIZE,
+  aspectRatio: 1,
+  alignSelf: "center",
+  marginTop: 2,      // tighter
+  marginBottom: 8,   // reduces space before controls
+},
+
+
+
+    row: {
+      flexDirection: "row",
+      flex: 1,
+    },
+    modalOverlay: {
+      flex: 1,
+      backgroundColor: "rgba(0,0,0,0.4)",
+      justifyContent: "center",
+      alignItems: "center",
+    },
+
+  modalCard: {
+  width: "80%",
+  backgroundColor: colors.card,
+  borderRadius: 16,
+  padding: 24,
+  alignItems: "center",
+  shadowColor: colors.gold,
+  shadowOffset: { width: 0, height: 4 },
+  shadowOpacity: 0.25,
+  shadowRadius: 6,
+  elevation: 8,
+},
+
+strikeTop: {
+  alignSelf: "center",
+  marginBottom: 4,
+},
+
+strikeTopText: {
+  fontSize: 15,
+  fontWeight: "700",
+  color: "#D9534F", // same red as Hyper
+},
+
+
+    modalTitle: {
+  fontSize: 16,
+  fontWeight: "600",
+  marginBottom: 12,
+  color: colors.gold,
+  textAlign: "center",
+},
+drawerOverlay: {
+  flex: 1,
+  backgroundColor: "rgba(0,0,0,0.45)",
+},
+
+drawer: {
+  position: "absolute",
+  right: 0,
+  top: 0,
+  bottom: 0,
+  width: "70%",              // REAL drawer width
+  backgroundColor: colors.card,
+  paddingTop: 60,
+  paddingHorizontal: 20,
+  borderTopRightRadius: 0,
+  borderBottomRightRadius: 0,
+  justifyContent: "flex-start",
+    alignItems: "flex-start",   // ⭐ THIS FIXES THE EMPTY PANEL
+},
+
+    drawerTitle: {
+  fontSize: 16,
+  fontWeight: "800",
+  color: colors.enteredNumber,
+  marginBottom: 8,
+  textAlign: "auto",
+},
+
+
+
+strikeBox: {
+  marginTop: 8,
+  marginBottom: 8,
+  alignSelf: "center",
+  padding: 8,
+  borderRadius: 6,
+  backgroundColor: colors.wrongBackground,
+},
+strikeText: {
+  fontSize: 16,
+  fontWeight: "bold",
+  color: colors.wrongNumber,
+},
+
+// --- Killer-style menu visuals for Classic ---
+menuOverlay: {
+  flex: 1,
+  backgroundColor: "rgba(0,0,0,0.5)",
+  justifyContent: "center",
+  alignItems: "center",
+  zIndex: 999,
+},
+menuBox: {
+  width: "70%",
+  backgroundColor: colors.card,
+  borderRadius: 14,
+  padding: 16,
+  alignItems: "center",
+},
+
+menuTitle: {
+  fontSize: 16,
+  fontWeight: "800",
+  color: colors.gold,
+  marginBottom: 10,
+},
+
+menuButton: {
+  width: "85%",
+  paddingVertical: 12,
+  marginVertical: 5,
+  borderRadius: 16,                         // tall premium style
+  backgroundColor: "transparent",   // theme base
+  borderWidth: 2,
+  borderColor: colors.gold,
+  alignItems: "center",
+  shadowColor: colors.gold,
+  shadowOpacity: 0.25,
+  shadowRadius: 6,
+  shadowOffset: { width: 0, height: 2 },
+  elevation: 4,
+},
+
+menuButtonText: {
+  fontSize: 15,
+  fontWeight: "700",
+  color: colors.gold,
+},
+drawerBtn: {
+  paddingVertical: 12,
+  paddingHorizontal: 16,
+},
+
+drawerBtnText: {
+  color: "#fff",
+  fontSize: 16,
+  fontWeight: "600",
+},
+
+
+  })
+
