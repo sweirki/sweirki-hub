@@ -34,10 +34,7 @@ import SudokuCell from "./components/SudokuCell";
 import UniversalModal from "./components/UniversalModal";
 import { awardLadderXP } from "./lib/ladderBridge";
 import { calculateXpForLadder } from "../utils/ladder/scoreEngine";
-
-
-
-
+import { onGameFinished } from "../src/game/onGameFinished";
 
 const { width } = Dimensions.get("window");
 const BOARD_SIZE = width - 40;
@@ -51,6 +48,19 @@ const MAX_STRIKES = 5;
 const clone = (p: any[][]) => JSON.parse(JSON.stringify(p));
 const emailName = (email?: string | null) =>
   (email || "").includes("@") ? (email || "").split("@")[0] : email || "Guest";
+const isBoardTouched = (board: any[][] | null) => {
+  if (!Array.isArray(board)) return false;
+
+  for (const row of board) {
+    for (const cell of row) {
+      if (!cell?.prefilled && cell?.value != null) return true;
+      if (Array.isArray(cell?.notes) && cell.notes.length > 0) return true;
+    }
+  }
+
+  return false;
+};
+
 
 // === X RULE CHECK ===
 // Returns true if placing `val` at [r,c] would break the X-diagonal rules
@@ -74,6 +84,9 @@ function violatesXRule(board: any[][], r: number, c: number, val: number) {
 }
 
 export default function XSudoku() {
+  const skipNextResumeRef = useRef(false);
+const skipNextSaveRef = useRef(false);
+
 const unlockAchievement = useAchievementsStore((s) => s.unlock);
 
  const colors = getColors();
@@ -213,16 +226,18 @@ useEffect(() => {
 
       const isValidSaved = validPuzzle && validSolution;
 
-      if (isValidSaved) {
-        // ensure difficulty exists for future saves
-        saved.difficulty = difficultyValue;
-        await saveGame("x", saved);
+    if (isValidSaved && isBoardTouched(saved.puzzle)) {
+  // ensure difficulty exists for future saves
+  saved.difficulty = difficultyValue;
+  await saveGame("x", saved);
 
-        setResumeData(saved);
-        setResumeVisible(true);
-      } else {
-        startNewBoard("easy");
-      }
+  setResumeData(saved);
+  setResumeVisible(true);
+} else {
+  await clearGame("x"); // 🧠 discard pristine boards
+  startNewBoard("easy");
+}
+
 
 
      
@@ -377,7 +392,8 @@ setHighlightDigit(cell?.value ?? null);
     if (idx === -1) next[r][c].notes.push(num);
     else next[r][c].notes.splice(idx, 1);
     setPuzzle(next);
-    saveGame("x", { puzzle: next, solution, timer, hintsLeft });
+   saveGame("x", { puzzle: next, solution, timer, hintsLeft, errorCount });
+
   };
 
   // ---- row/col/box blink on completion ----
@@ -411,20 +427,7 @@ setHighlightDigit(cell?.value ?? null);
       return;
     }
 
-    // Check X-rule BEFORE committing the value
-    if (violatesXRule(puzzle, r, c, num)) {
-      // Feedback + strike
-      setErrorCount((prev) => prev + 1);
-      try { Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error); } catch {}
-      // highlight both diagonals cells briefly
-      const diagCells: [number, number][] = [];
-      if (r === c) for (let i = 0; i < 9; i++) diagCells.push([i, i]);
-      if (r + c === 8) for (let i = 0; i < 9; i++) diagCells.push([i, 8 - i]);
-      triggerBlink(diagCells);
-return;
-
-     
-    }
+   
 
     // Commit value
     pushHistory();
@@ -433,16 +436,33 @@ return;
     // wiping notes on commit
     if (Array.isArray(next[r][c].notes)) next[r][c].notes = [];
     setPuzzle(next);
-    saveGame("x", { puzzle: next, solution, timer, hintsLeft });
+  saveGame("x", { puzzle: next, solution, timer, hintsLeft, errorCount });
 
-    // correctness haptic
-    if (num !== next[r][c].solution) {
-      setErrorCount((prev) => prev + 1);
-      try { Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error); } catch {}
-     
-    } else {
-      try { Haptics.selectionAsync(); } catch {}
-    }
+   let isWrong = false;
+
+// wrong vs solution
+if (num !== next[r][c].solution) {
+  isWrong = true;
+}
+
+// X-rule violation (AFTER placement)
+if (violatesXRule(next, r, c, num)) {
+  isWrong = true;
+
+  // blink diagonals
+  const diagCells: [number, number][] = [];
+  if (r === c) for (let i = 0; i < 9; i++) diagCells.push([i, i]);
+  if (r + c === 8) for (let i = 0; i < 9; i++) diagCells.push([i, 8 - i]);
+  triggerBlink(diagCells);
+}
+
+if (isWrong) {
+  setErrorCount((prev) => prev + 1);
+  try { Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error); } catch {}
+} else {
+  try { Haptics.selectionAsync(); } catch {}
+}
+
 
     checkRowColBoxCompletion(next, r, c);
     checkCompletion(next);
@@ -457,7 +477,8 @@ return;
     const next = clone(puzzle);
     next[r][c].value = null;
     setPuzzle(next);
-    saveGame("x", { puzzle: next, solution, timer, hintsLeft });
+   saveGame("x", { puzzle: next, solution, timer, hintsLeft, errorCount });
+
   };
 
   const undo = () => {
@@ -619,6 +640,14 @@ recordGameResult({
     console.error("❌ Seasonal write (X) failed:", err);
   }
 
+await onGameFinished({
+  mode: "x",
+  win: true,
+  time: timer,
+  errors: errorCount,
+});
+
+
   setWinVisible(true);
 
 // ⭐ Phase 8E — increment games played (total + x)
@@ -650,11 +679,13 @@ unlockAchievement("first_win");
   return () => {
     if (hasWon) return;
 
-    // â›” block saving until the puzzle is real 9Ã—9
     if (!Array.isArray(puzzle) || puzzle.length !== 9) return;
     if (!puzzle.every(row => Array.isArray(row) && row.length === 9)) return;
 
-    saveGame("x", { puzzle, solution, timer, hintsLeft });
+    // 🧠 do not save untouched boards
+    if (!isBoardTouched(puzzle)) return;
+
+  saveGame("x", { puzzle, solution, timer, hintsLeft, errorCount });
   };
 }, [puzzle, solution, timer, hintsLeft, hasWon]);
 
@@ -880,7 +911,7 @@ unlockAchievement("first_win");
 
 
  {/* Controls (MATCH Hyper spacing) */}
-<View style={{ marginTop: 12, marginBottom: 8, width: "100%", alignItems: "center" }}>
+<View style={{ marginTop: 6, marginBottom: 4, width: "100%", alignItems: "center" }}>
   <Controls
     onUndo={undo}
     onRedo={redo}
@@ -909,18 +940,31 @@ unlockAchievement("first_win");
 </ImageBackground>
 
 {/* Win modal */}
-    <WinModal
+ <WinModal
   visible={winVisible}
   time={timer}
-        onPlayAgain={startNewBoard}
-        onRestart={startNewBoard}
-        onClose={async () => {
-          await clearGame("x");
-          setWinVisible(false);
-        }}
-        difficulty={difficulty}
-        isDaily={false}
-      />
+  onPlayAgain={startNewBoard}
+  onRestart={startNewBoard}
+  onClose={() => {
+    // 🔒 prevent resume & autosave after leaving finished board
+    skipNextResumeRef.current = true;
+    skipNextSaveRef.current = true;
+
+    // fire-and-forget clear (NO await)
+    clearGame("x");
+
+    // close modal first
+    setWinVisible(false);
+
+    // 🚀 navigate AFTER modal unmount (prevents crash)
+    requestAnimationFrame(() => {
+      router.replace("/variantHub");
+    });
+  }}
+  difficulty={difficulty}
+  isDaily={false}
+/>
+
 
       {/* Resume Game Modal (like Hyper/Killer) */}
       {resumeVisible && (
@@ -951,6 +995,12 @@ unlockAchievement("first_win");
                     ? resumeData.timer
                     : 0
                 );
+                 // ✅ THIS IS FIX 2 — RESTORE STRIKES
+    setErrorCount(
+      typeof resumeData.errorCount === "number"
+        ? resumeData.errorCount
+        : 0
+    );
                 resumeTimer();
               }
               setResumeVisible(false);
@@ -1275,8 +1325,8 @@ strikeTextInline: {
 
 boardContainer: {
   alignSelf: "center",
-  marginTop: 12,
-  marginBottom: 6,
+  marginTop: 6,
+  marginBottom: 4,
 },
 
 board: {

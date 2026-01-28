@@ -6,6 +6,7 @@ import { useAchievementsStore } from "../../app/stores/useAchievementsStore";
 import { db } from "../../firebase";
 import { doc, setDoc, getDoc } from "firebase/firestore";
 import { safeFirestoreCall } from "../../src/utils/firestoreSafe";
+type Difficulty = keyof typeof scoreConfig.base;
 
 /* -------------------------------------------------
    SCORE CALCULATOR (classic gameplay score)
@@ -18,7 +19,7 @@ export function calculateScore({
   errors,
   streak,
 }: {
-  difficulty: string;
+  difficulty: Difficulty;
   time: number;
   hints: number;
   undos: number;
@@ -59,7 +60,7 @@ export function calculateXpForLadder({
   errors,
 }: {
   mode: string;
-  difficulty: string;
+  difficulty: Difficulty;
   time: number;
   errors: number;
 }): number {
@@ -139,7 +140,8 @@ export async function getCurrentStreak(user: string): Promise<number> {
 }
 
 export function checkAchievements(game: {
-  difficulty: string;
+  difficulty: Difficulty;
+
   time: number;
   totalGames: number;
   streak: number;
@@ -179,18 +181,17 @@ export function calculateSeasonXP({
   errors,
   streak,
   achievementLevel,
-}: {
-  difficulty: string;
+}: {difficulty: Difficulty;
   time: number;
   errors: number;
   streak: number;
   achievementLevel: string;
 }) {
   const base = seasonXP.base[difficulty] || 40;
-  const fast =
-    time <= scoreConfig.fastSolveBonus[difficulty]
-      ? seasonXP.fastBonus[difficulty]
-      : 0;
+ const fast =
+  time <= seasonXP.fastBonus[difficulty]
+    ? seasonXP.fastBonus[difficulty]
+    : 0;
 
   const clean = errors === 0 ? seasonXP.noErrorBonus : 0;
   const streakXP = streak * seasonXP.streakBonus;
@@ -209,6 +210,35 @@ export function getSeasonRank(xp: number): string {
   return "Bronze";
 }
 
+
+/* -------------------------------------------------
+   SEASON PROMOTION (THRESHOLDS)
+------------------------------------------------- */
+
+export const SEASON_PROMOTION_THRESHOLDS = {
+  Bronze: { promote: 1200, demote: 0 },
+  Silver: { promote: 3000, demote: 800 },
+  Gold: { promote: 7000, demote: 2500 },
+  Platinum: { promote: 14000, demote: 6000 },
+  Diamond: { promote: Infinity, demote: 12000 },
+};
+
+export type SeasonOutcome = "promote" | "stay" | "demote";
+
+export function getSeasonOutcome(
+  seasonXP: number,
+  currentRank: keyof typeof SEASON_PROMOTION_THRESHOLDS
+): SeasonOutcome {
+  const rule = SEASON_PROMOTION_THRESHOLDS[currentRank];
+
+  if (!rule) return "stay";
+  if (seasonXP >= rule.promote) return "promote";
+  if (seasonXP < rule.demote) return "demote";
+  return "stay";
+}
+
+
+
 /* -------------------------------------------------
    SEASONAL SCORE WRITER
 ------------------------------------------------- */
@@ -218,8 +248,9 @@ export async function writeSeasonalScore(
   score: number,
   time: number,
   streak: number,
-  mode: string
-) {
+  difficulty: Difficulty
+)
+ {
   try {
    const seasonRef = doc(db, "seasonMeta", "current");
 const seasonSnap = await safeFirestoreCall(
@@ -251,13 +282,14 @@ const userSnap = await safeFirestoreCall(
 
     const achievementLevel = useAchievementsStore.getState().getLevel();
 
-    const seasonXPForGame = calculateSeasonXP({
-      difficulty: mode,
-      time,
-      errors: 0,
-      streak,
-      achievementLevel,
-    });
+   const seasonXPForGame = calculateSeasonXP({
+  difficulty,
+  time,
+  errors: 0,
+  streak,
+  achievementLevel,
+});
+
 
     const finalXP = previousXP + seasonXPForGame;
     const rank = getSeasonRank(finalXP);

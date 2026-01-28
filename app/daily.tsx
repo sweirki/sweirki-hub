@@ -1,4 +1,5 @@
-﻿import React, { useEffect, useRef, useState } from "react";
+// DAILY FORCE RELOAD v1
+import React, { useEffect, useRef, useState } from "react";
 import {
   View,
   Text,
@@ -9,6 +10,7 @@ import {
   ImageBackground,
 } from "react-native";
 import { awardLadderXP, refreshLadderData } from "./lib/ladderBridge";
+import { addDoc, collection, serverTimestamp } from "firebase/firestore";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { doc, getDoc, setDoc } from "firebase/firestore";
 import { useRouter } from "expo-router";
@@ -21,15 +23,18 @@ import { getColors } from "./theme/index";
 import Sudoku from "./sudoku";
 import * as Haptics from "expo-haptics";
 import { useAchievementsStore } from "./stores/useAchievementsStore";
+import { useRevenueCat } from "../src/hooks/useRevenueCat";
+import { onGameFinished } from "../src/game/onGameFinished";
 
 /* =========================
    Helpers
 ========================= */
 
 
-function getTodayId() {
-  return new Date().toLocaleDateString("en-CA"); // YYYY-MM-DD (LOCAL)
+function getDailyIdUTC() {
+  return new Date().toISOString().slice(0, 10); // YYYY-MM-DD UTC
 }
+
 function dailyKey(key: string) {
   const uid = auth.currentUser?.uid || "guest";
   return `${key}:${uid}`;
@@ -49,15 +54,27 @@ function getWeekId(date: Date) {
 ========================= */
 
 export default function DailyChallenge() {
-const unlockAchievement = useAchievementsStore((s) => s.unlock);  
+ 
+ const unlockAchievement = useAchievementsStore((s) => s.unlock);
+const { isPremium } = useRevenueCat();
+
+const premiumAtStartRef = useRef<boolean | null>(null);
+
+useEffect(() => {
+  if (premiumAtStartRef.current === null && isPremium !== undefined) {
+    premiumAtStartRef.current = isPremium;
+  }
+}, [isPremium]);
+
 const clearDailyDev = async () => {
   try {
-    await AsyncStorage.multiRemove([
-      "dailyPlayed",
-      "dailyStreak",
-      "lastDailyDate",
-      "weeklyGames",
-    ]);
+   await AsyncStorage.multiRemove([
+  dailyKey("dailyPlayed"),
+  dailyKey("dailyStreak"),
+  dailyKey("lastDailyDate"),
+  dailyKey("weeklyGames"),
+]);
+
 
     // 🔑 RESET LOCAL STATE
     setAlreadyPlayedToday(false);
@@ -89,6 +106,7 @@ const [authPopup, setAuthPopup] = useState(false);
   const [loading, setLoading] = useState(true);
   const [puzzle, setPuzzle] = useState<any>(null);
   const [alreadyPlayedToday, setAlreadyPlayedToday] = useState(false);
+  
   const [winVisible, setWinVisible] = useState(false);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
@@ -103,25 +121,17 @@ const [authPopup, setAuthPopup] = useState(false);
      Load Daily Puzzle
   ========================= */
 
-useEffect(() => {
-  return () => {
-    if (devReloadTimeoutRef.current) {
-      clearTimeout(devReloadTimeoutRef.current);
-      devReloadTimeoutRef.current = null;
-    }
-  };
-}, []);
-
-
  useFocusEffect(
   React.useCallback(() => {
     let cancelled = false;
 
     const loadDaily = async () => {
       try {
-        const today = getTodayId();
+        const today = getDailyIdUTC();
+        
 const played = await AsyncStorage.getItem(dailyKey("dailyPlayed"));
 const lastPlayed = await AsyncStorage.getItem(dailyKey("lastDailyDate"));
+
 if (played === today || lastPlayed === today) {
   setAlreadyPlayedToday(true);
   setPuzzle(null);
@@ -166,9 +176,33 @@ if (played === today || lastPlayed === today) {
   ========================= */
 
   const commitDailyWin = async (result: any) => {
+    console.log("🔥🔥 DAILY COMMIT ENTERED", {
+  uid: auth.currentUser?.uid,
+  premiumAtStart: premiumAtStartRef.current,
+  isPremium,
+});
+
+    const today = getDailyIdUTC();
+if (premiumAtStartRef.current === false) {
+  await AsyncStorage.setItem(dailyKey("dailyPlayed"), getDailyIdUTC());
+  setSaving(false);
+  return;
+}
+
+
+await addDoc(collection(db, "leaderboard"), {
+  period: "daily",
+  dailyId: today,
+  uid: auth.currentUser!.uid,
+  time: result.time,
+  errors: result.errors,
+  createdAt: serverTimestamp(),
+});
+
     if (commitInProgress.current) return;
     commitInProgress.current = true;
 // 📊 Phase 8A — record Daily analytics (canonical)
+
 recordGameResult({
   username: auth.currentUser?.uid,
   mode: "daily",
@@ -188,7 +222,7 @@ const xp = calculateXpForLadder({
 });
 
     try {
-      const today = getTodayId();
+      const today = getDailyIdUTC();
 
       /* ---------- DAILY LEADERBOARD ---------- */
       const dailyRef = doc(db, "dailyLeaderboard", today);
@@ -200,10 +234,12 @@ const xp = calculateXpForLadder({
 
       const userKey = result.user || "Guest";
       const alreadyIn = scores.some((s: any) => s?.user === userKey);
+console.log("DAILY alreadyIn =", alreadyIn);
 
       if (!alreadyIn) {
         scores.push(result);
         await setDoc(dailyRef, { scores }, { merge: true });
+
 
 
         // ✅ compute daily placement (fastest time rank)
@@ -223,58 +259,8 @@ if (dailyRank && dailyRank <= 100) {
 
       }
 
-      /* ---------- WEEKLY LADDER ---------- */
-      const weekId = getWeekId(new Date());
-      const weeklyRef = doc(db, "weeklyLeaderboard", weekId);
-      const weeklySnap = await getDoc(weeklyRef);
-
-      const weeklyData = weeklySnap.exists()
-        ? weeklySnap.data()
-        : { players: {} };
-
-      const prev = weeklyData.players[userKey] || { xp: 0, games: 0 };
-
-      weeklyData.players[userKey] = {
-       xp: prev.xp + xp,
-        games: prev.games + 1,
-        updatedAt: Date.now(),
-      };
-
-      await setDoc(weeklyRef, weeklyData, { merge: true });
-      // ✅ compute weekly placement (by XP desc)
-const weeklyPlayers = Object.entries(weeklyData.players || {}).map(
-  ([user, data]: any) => ({
-    user,
-    xp: data?.xp ?? 0,
-  })
-);
-
-weeklyPlayers.sort((a, b) => b.xp - a.xp);
-
-const weeklyIndex = weeklyPlayers.findIndex(
-  (p) => p.user === userKey
-);
-
-const weeklyRank = weeklyIndex >= 0 ? weeklyIndex + 1 : null;
-
-if (weeklyRank && weeklyRank <= 100) {
-  const rawWeekly = await AsyncStorage.getItem("weeklyTop100Count");
-  const nextWeekly = (rawWeekly ? parseInt(rawWeekly, 10) : 0) + 1;
-  await AsyncStorage.setItem("weeklyTop100Count", String(nextWeekly));
-
-  // 🧠 append or set ladder text
-  setLadderText((prev) =>
-    prev
-      ? `${prev}\n🏅 Weekly Top 100 — ${nextWeekly} times`
-      : nextWeekly === 1
-        ? "🏅 Weekly Top 100 — first achievement"
-        : `🏅 Weekly Top 100 — ${nextWeekly} times`
-  );
-}
-
-
-      /* ---------- STREAK + LOCAL LOCK (LAST) ---------- */
-      const lastPlayed = await AsyncStorage.getItem("lastDailyDate");
+    /* ---------- STREAK + LOCAL LOCK (LAST) ---------- */
+      const lastPlayed = await AsyncStorage.getItem(dailyKey("lastDailyDate"));
       let streak = 1;
 
       if (lastPlayed) {
@@ -284,7 +270,7 @@ if (weeklyRank && weeklyRank <= 100) {
           (1000 * 3600 * 24);
 
         if (diff === 1) {
-          const prev = await AsyncStorage.getItem("dailyStreak");
+         const prev = await AsyncStorage.getItem(dailyKey("dailyStreak"));
           streak = prev ? parseInt(prev, 10) + 1 : 1;
         }
       }
@@ -320,23 +306,45 @@ setSaving(false);
     }
   };
 
+  const handleDailyLose = async () => {
+  const today = getDailyIdUTC();
+
+  await AsyncStorage.setItem(dailyKey("dailyPlayed"), today);
+  await AsyncStorage.setItem(dailyKey("lastDailyDate"), today);
+
+  setAlreadyPlayedToday(true);
+  router.replace("/daily");
+};
+
+
+
   /* =========================
      Handlers
   ========================= */
 const pendingResult = useRef(null as any);
 const handleDailyWin = async (result: any) => {
- if (!auth.currentUser) {
-  setAuthPopup(true);
-  return;
-}
+  if (!auth.currentUser) {
+    setAuthPopup(true);
+    return;
+  }
 
-
-  const today = getTodayId();
+  const today = getDailyIdUTC();
+  // rest of the function…
 
   // 🔒 HARD LOCK DAILY IMMEDIATELY (CRITICAL)
  await AsyncStorage.setItem(dailyKey("dailyPlayed"), today);
   pendingResult.current = result;
   Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+
+// ✅ HISTORY (UNIFIED PATTERN — DAILY)
+await onGameFinished({
+  mode: "daily",
+  win: true,
+  time: result.time,
+  errors: result.errors,
+});
+
+
   setWinVisible(true);
 
   setLadderText(null);
@@ -358,6 +366,7 @@ const handleDailyWin = async (result: any) => {
   }
 
   if (alreadyPlayedToday) {
+    
     return (
       <ImageBackground
         source={require("../assets/bg.png")}
@@ -368,9 +377,11 @@ const handleDailyWin = async (result: any) => {
         <View style={styles.lockedWrap}>
           <View style={[styles.lockedCard, { backgroundColor: colors.card }]}>
             <Text style={styles.lockedTitle}>Daily Challenge</Text>
-            <Text style={styles.lockedText}>
-              You already completed today’s puzzle.
-            </Text>
+           <Text style={styles.lockedText}>
+ Today’s Daily Challenge is complete.
+{"\n"}Come back tomorrow for a fresh puzzle 🌅
+</Text>
+
             <TouchableOpacity
               style={[
                 styles.button,
@@ -399,28 +410,25 @@ const handleDailyWin = async (result: any) => {
   return (
     
     <>
-   {/*  <TouchableOpacity
-  onPress={clearDailyDev}
-  style={{
-    position: "absolute",
-    top: 40,
-    right: 20,
-    zIndex: 999,
-    backgroundColor: "red",
-    padding: 10,
-    borderRadius: 8,
-  }}
->
-  <Text style={{ color: "white", fontWeight: "800" }}>
-    DEV CLEAR
-  </Text>
-</TouchableOpacity> */}
 
-      <Sudoku
+
+  <Sudoku
   isDaily
   onDailyWin={handleDailyWin}
+  onDailyLose={async () => {
+    const today = getDailyIdUTC();
+
+    await AsyncStorage.setItem(dailyKey("dailyPlayed"), today);
+    await AsyncStorage.setItem(dailyKey("lastDailyDate"), today);
+
+    setAlreadyPlayedToday(true);
+    router.replace("/daily");
+  }}
   initialPuzzle={puzzle}
 />
+
+
+
       <Modal transparent visible={winVisible} animationType="fade">
         <View style={styles.modalOverlay}>
           <View style={[styles.modalCard, { backgroundColor: colors.card }]}>
@@ -430,9 +438,12 @@ const handleDailyWin = async (result: any) => {
     : "🎉 Daily Challenge Completed!"}
 </Text>
 
-            <Text style={[styles.modalSub, { marginBottom: 6 }]}>
-  ✨ Progress saved · Daily XP applied
+           <Text style={[styles.modalSub, { marginBottom: 6 }]}>
+  {isPremium
+    ? "✨ Progress saved · Daily XP applied"
+    : "✨ Daily completed · Practice mode"}
 </Text>
+
 
 
 {ladderText && (
@@ -440,18 +451,6 @@ const handleDailyWin = async (result: any) => {
     {ladderText}
   </Text>
 )}
-
-<Text style={[styles.modalSub, { opacity: 0.75, marginTop: 2 }]}>
-  📊 Today’s result counts toward your weekly rank
-</Text>
-
-
-{dailyStreak >= 2 && (
-  <Text style={[styles.modalSub, { opacity: 0.9 }]}>
-    🔥 Streak building — keep it going
-  </Text>
-)}
-
 
         {saving && <Text style={styles.modalSub}>⏳ Finalizing today’s results…</Text>}
 

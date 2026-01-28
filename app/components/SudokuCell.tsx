@@ -156,7 +156,7 @@ if (!overlayColor) {
 
   // Light, clean shading for pro sudoku look
   if (isBoxEven) {
-    overlayColor = "rgba(200, 200, 200, 0.20)";
+    overlayColor = "rgba(200, 200, 200, 0.34)";
   }
 }
 
@@ -220,14 +220,14 @@ const styles = StyleSheet.create({
     ...StyleSheet.absoluteFillObject,
   },
   text: {
-    fontSize: 20,
+    fontSize: 17,
     fontWeight: "600",
     textAlign: "center",
     lineHeight: CELL_SIZE * 0.78,
   },
   notes: {
-    fontSize: 14,
-    fontWeight: "400",
+    fontSize: 9,
+    fontWeight: "600",
     textAlign: "center",
     lineHeight: CELL_SIZE * 0.33,
   },

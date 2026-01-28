@@ -35,6 +35,8 @@ import { useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { strokeBase } from "./theme/boardTheme";
+import { onGameFinished } from "../src/game/onGameFinished";
+
 
 const typedStrokeBase = strokeBase as unknown as {
   stroke: string;
@@ -56,7 +58,11 @@ const GRID_SIZE = CELL_SIZE * 9;
 
 
 
+
 export default function HyperSudoku() {
+  const skipNextResumeRef = useRef(false);
+const skipNextSaveRef = useRef(false);
+
 const unlockAchievement = useAchievementsStore((s) => s.unlock);
 const colors = getColors();
 
@@ -181,6 +187,18 @@ const initializingRef = useRef(true);
   };
 
   const clone = (p: any[][]) => JSON.parse(JSON.stringify(p));
+const isBoardTouched = (board: any[][] | null) => {
+  if (!Array.isArray(board)) return false;
+
+  for (const row of board) {
+    for (const cell of row) {
+      if (!cell?.prefilled && cell?.value != null) return true;
+      if (Array.isArray(cell?.notes) && cell.notes.length > 0) return true;
+    }
+  }
+
+  return false;
+};
 
  useEffect(() => {
   const init = async () => {
@@ -188,8 +206,9 @@ const initializingRef = useRef(true);
       const saved = await loadGame("hyper");
 
       // SAFETY CHECK: make sure saved puzzle is a real 9×9 grid of valid cells
-     const savedTimer = (saved as { Timer?: unknown }).Timer;
-      const isValidSaved =
+    const savedTimer = (saved as { timer?: unknown }).timer;
+
+     const isValidSaved =
   saved &&
   Array.isArray(saved.puzzle) &&
   saved.puzzle.length === 9 &&
@@ -207,18 +226,17 @@ const initializingRef = useRef(true);
           Array.isArray(cell.notes)
       )
   ) &&
-  (savedTimer === undefined || typeof savedTimer === "number")
+  (savedTimer === undefined || typeof savedTimer === "number");
 
-
-      
-      if (isValidSaved) {
-        initializingRef.current = false;
-        setResumeData(saved);
-        setResumeVisible(true);
-      } else {
-        initializingRef.current = false;
-        startNewBoard();
-      }
+if (isValidSaved && isBoardTouched(saved.puzzle)) {
+  initializingRef.current = false;
+  setResumeData(saved);
+  setResumeVisible(true);
+} else {
+  initializingRef.current = false;
+  await clearGame("hyper");
+  startNewBoard();
+}
     } catch (err) {
       console.warn("Init load failed:", err);
       initializingRef.current = false;
@@ -377,7 +395,8 @@ const next = clone(puzzle);
     // erase small pencil notes when you write a real number
     if (Array.isArray(next[r][c].notes)) next[r][c].notes = [];
     setPuzzle(next);
-    saveGame("hyper", { puzzle: next, solution, Timer });
+    saveGame("hyper", { puzzle: next, solution, timer: Timer, errorCount });
+
     // correct/wrong check
 if (num !== next[r][c].solution) {
   setErrorCount((prev) => prev + 1);
@@ -593,6 +612,16 @@ const solved = puzzle.map((row) =>
 );
 
 setPuzzle(solved);
+
+// ✅ HISTORY (UNIFIED PATTERN)
+await onGameFinished({
+  mode: "hyper",
+  win: true,
+  time: Timer,
+  errors: errorCount,
+});
+
+
 setWinVisible(true);
 saveWin(username, "hyper", Timer, errorCount);
 
@@ -640,16 +669,17 @@ unlockAchievement("first_win");
   };
 
   const digitCounts = getDigitCounts();
-
- useEffect(() => {
-  // âŒ NEVER autosave incomplete or invalid board
+useEffect(() => {
   if (hasWon) return;
   if (!Array.isArray(puzzle) || puzzle.length !== 9) return;
   if (!puzzle.every(row => Array.isArray(row) && row.length === 9)) return;
 
-  saveGame("hyper", { puzzle, solution, Timer });
-}, [puzzle, solution, Timer, hasWon]);
+  // 🧠 do not save untouched boards
+  if (!isBoardTouched(puzzle)) return;
 
+ saveGame("hyper", { puzzle, solution, timer: Timer, errorCount });
+
+}, [puzzle, solution, Timer, hasWon]);
 
 
   // THEME: wrapped root in ImageBackground
@@ -950,7 +980,7 @@ stroke={colors.hyperZoneBorder}
   hintsLeft={hintsLeft}
   pencilMode={isPencilMode}
   onTogglePencil={() => setIsPencilMode((p) => !p)}
-  locked={gameWon || winVisible}   // ðŸ”¥ ADD THIS
+  locked={gameWon || winVisible}
 />
 
 
@@ -969,18 +999,30 @@ stroke={colors.hyperZoneBorder}
 
 
         <WinModal
-          visible={winVisible}
-          Time={Timer}
-          onPlayAgain={startNewBoard}
-          onRestart={startNewBoard}
-          onClose={async () => {
-            await clearGame("hyper");
-            setWinVisible(false);
-          }}
-          difficulty={difficulty}
-          isDaily={false}
-        />
-     
+  visible={winVisible}
+  Time={Timer}
+  onPlayAgain={startNewBoard}
+  onRestart={startNewBoard}
+  onClose={() => {
+    // 🔒 block resume & autosave after win
+    skipNextResumeRef.current = true;
+    skipNextSaveRef.current = true;
+
+    // clear saved game (fire-and-forget)
+    clearGame("hyper");
+
+    // close modal first
+    setWinVisible(false);
+
+    // 🚀 navigate after modal unmount (prevents crash)
+    requestAnimationFrame(() => {
+      router.replace("/variantHub");
+    });
+  }}
+  difficulty={difficulty}
+  isDaily={false}
+/>
+
         {/* Resume Game Modal (like Killer) */}
         <UniversalModal
           visible={resumeVisible}
@@ -989,22 +1031,33 @@ stroke={colors.hyperZoneBorder}
           actions={[
             {
               label: "YES",
-              onPress: () => {
-                if (resumeData) {
-                  setPuzzle(resumeData.puzzle);
-                  if (resumeData.solution) {
-                    setSolution(resumeData.solution);
-                  }
-                  // Hyper saves Timer with capital T
-                  setTimer(
-                    typeof resumeData.Timer === "number"
-                      ? resumeData.Timer
-                      : 0
-                  );
-                  resumeTimer();
-                }
-                setResumeVisible(false);
-              },
+             onPress: () => {
+  if (resumeData) {
+    setPuzzle(resumeData.puzzle);
+    if (resumeData.solution) {
+      setSolution(resumeData.solution);
+    }
+
+    // restore timer
+   setTimer(
+  typeof resumeData.timer === "number"
+    ? resumeData.timer
+    : 0
+);
+
+
+    // ✅ RESTORE STRIKES (THIS WAS MISSING)
+    setErrorCount(
+      typeof resumeData.errorCount === "number"
+        ? resumeData.errorCount
+        : 0
+    );
+
+    resumeTimer();
+  }
+  setResumeVisible(false);
+},
+
             },
             {
               label: "NO",
@@ -1164,7 +1217,7 @@ const styles = (colors: ReturnType<typeof getColors>) =>
   justifyContent: "flex-start",
   alignItems: "center",
   paddingTop: 20,
-  paddingBottom: 20,
+  paddingBottom: 36,
 },
 
 

@@ -1,290 +1,276 @@
-import React, { useState, useEffect } from "react";
+import React, { useEffect, useState } from "react";
 import {
   View,
   Text,
   StyleSheet,
-  ScrollView,
+  ActivityIndicator,
   ImageBackground,
-  TouchableOpacity,
 } from "react-native";
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { useRouter } from "expo-router";
-import { db, auth } from "../firebase";
-import { doc, getDoc } from "firebase/firestore";
-import { theme, getColors } from "../theme";
-import { getRank, getBadges } from "../utils/statsUtils";
-import RequireAuth from "./RequireAuth";
+import { auth } from "../firebase";
+import { LinearGradient } from "expo-linear-gradient";
+import { ScrollView } from "react-native";
 
-function StatsInner() {
-  const colors = getColors();
-  const insets = useSafeAreaInsets();
-  const router = useRouter();
 
-  const [stats, setStats] = useState({
-    totalGames: 0,
-    totalWins: 0,
-    totalTime: 0,
-    totalHints: 0,
-    totalPoints: 0,
-    bestStreak: 0,
-    dailyStreak: 0,
-    rank: "Unranked",
-    achievements: [] as string[],
-    badges: [] as string[],
-  });
+type GameEntry = {
+  mode: string;
+  win: boolean;
+  time: number;
+  errors: number;
+  date: string;
+};
+
+function historyKey() {
+  const uid = auth.currentUser?.uid || "guest";
+  return `gameHistory:${uid}`;
+}
+
+function formatTime(sec: number) {
+  if (!isFinite(sec) || sec <= 0) return "-";
+  const m = Math.floor(sec / 60);
+  const s = sec % 60;
+  return `${m}:${s.toString().padStart(2, "0")}`;
+}
+
+function modeIcon(mode: string) {
+  switch (mode) {
+    case "classic":
+      return "🧩";
+    case "daily":
+      return "📅";
+    case "hyper":
+      return "⚡";
+    case "killer":
+      return "☠️";
+    case "x":
+      return "❌";
+    default:
+      return "🎮";
+  }
+}
+
+export default function StatsScreen() {
+  const [loading, setLoading] = useState(true);
+  const [history, setHistory] = useState<GameEntry[]>([]);
 
   useEffect(() => {
     const load = async () => {
-      const user = auth.currentUser;
-      if (!user) return;
-
-      const userId = user.email || user.uid;
-      const snap = await getDoc(doc(db, "users", userId));
-
-      let data: any = {};
-      if (snap.exists()) {
-        const d = snap.data();
-        data = d.stats ?? d;
+      try {
+        const raw = await AsyncStorage.getItem(historyKey());
+        const parsed = raw ? JSON.parse(raw) : [];
+        setHistory(parsed);
+      } catch {
+        setHistory([]);
+      } finally {
+        setLoading(false);
       }
-
-      const totalWins = Number(data.totalWins ?? 0);
-      const bestStreak = Number(data.bestStreak ?? 0);
-      const totalPoints = Number(data.totalPoints ?? 0);
-
-      const storedDaily = await AsyncStorage.getItem("dailyStreak");
-      const dailyStreak = storedDaily ? Number(storedDaily) : 0;
-
-      setStats({
-        totalGames: Number(data.totalGames ?? totalWins),
-        totalWins,
-        totalTime: Number(data.totalTime ?? 0),
-        totalHints: Number(data.totalHints ?? 0),
-        totalPoints,
-        bestStreak,
-        dailyStreak,
-        rank: getRank(totalWins * 10 + bestStreak),
-        achievements: data.achievements ?? [],
-        badges: getBadges({
-          games: [],
-          points: totalPoints,
-          streak: bestStreak,
-          avgErrors: 0,
-        }),
-      });
     };
-
     load();
   }, []);
 
-  const renderStreakBar = () => {
-    const capped = Math.min(stats.dailyStreak, 30);
-    const percent = (capped / 30) * 100;
-
+  if (loading) {
     return (
-      <View style={styles(colors).streakBar}>
-        <View
-          style={[styles(colors).streakFill, { width: `${percent}%` }]}
-        />
-        <Text style={styles(colors).streakText}>
-          🔥 {stats.dailyStreak} days
+      <View style={styles.center}>
+        <ActivityIndicator size="large" color="#FBE7A1" />
+      </View>
+    );
+  }
+
+  if (history.length === 0) {
+    return (
+      <View style={styles.center}>
+        <Text style={styles.emptyText}>
+          No stats yet. Play some games!
         </Text>
       </View>
     );
-  };
+  }
+
+  const totalGames = history.length;
+  const wins = history.filter(h => h.win);
+  const losses = totalGames - wins.length;
+  const winRate = Math.round((wins.length / totalGames) * 100);
+
+  const avgTime =
+    wins.length > 0
+      ? Math.round(
+          wins.reduce((sum, g) => sum + g.time, 0) / wins.length
+        )
+      : 0;
+
+  const modes = ["classic", "daily", "hyper", "killer", "x"];
 
   return (
     <ImageBackground
       source={require("../assets/bg.png")}
-      style={[styles(colors).bg, { paddingBottom: insets.bottom }]}
+      style={styles.bg}
       blurRadius={3}
     >
-      <ScrollView
-        contentContainerStyle={[
-          styles(colors).scroll,
-          { paddingTop: 80 }, // ⬅ pushes screen DOWN
-        ]}
-      >
-        <View style={styles(colors).container}>
-          <Text style={styles(colors).title}>Stats</Text>
+      <LinearGradient
+        colors={["rgba(0,0,40,0.75)", "transparent"]}
+        style={StyleSheet.absoluteFillObject}
+      />
 
-          <View style={styles(colors).card}>
-            <Text style={styles(colors).cardTitle}>Overview</Text>
-            <Text style={styles(colors).line}>- Rank: {stats.rank}</Text>
-            <Text style={styles(colors).line}>
-              - Total Games: {stats.totalGames}
-            </Text>
-            <Text style={styles(colors).line}>
-              - Total Wins: {stats.totalWins}
-            </Text>
-            <Text style={styles(colors).line}>
-              - Total Playtime: {stats.totalTime} s
-            </Text>
-            <Text style={styles(colors).line}>
-              - Total Hints Used: {stats.totalHints}
-            </Text>
-            <Text style={styles(colors).line}>
-              - Total Points: {stats.totalPoints}
-            </Text>
-            <Text style={styles(colors).line}>
-              - Best Streak: {stats.bestStreak} days
-            </Text>
-            <Text style={styles(colors).line}>
-              - Daily Streak: {stats.dailyStreak} days
-            </Text>
-            {renderStreakBar()}
-          </View>
+     <ScrollView
+  contentContainerStyle={styles.container}
+  showsVerticalScrollIndicator={false}
+>
+        <Text style={styles.title}>Stats</Text>
+        <Text style={styles.subtitle}>
+          Your performance across all games
+        </Text>
 
-          <View style={styles(colors).card}>
-            <Text style={styles(colors).cardTitle}>Achievements</Text>
-            {stats.achievements.length ? (
-              <View style={styles(colors).badgeRow}>
-                {stats.achievements.map((a, i) => (
-                  <View key={i} style={styles(colors).badge}>
-                    <Text style={styles(colors).badgeText}>{a}</Text>
-                  </View>
-                ))}
+        {/* OVERALL */}
+        <View style={styles.card}>
+          <Text style={styles.cardTitle}>Overall</Text>
+
+          <StatRow label="Games Played" value={totalGames} />
+          <StatRow label="Wins" value={wins.length} />
+          <StatRow label="Losses" value={losses} />
+          <StatRow label="Win Rate" value={`${winRate}%`} />
+          <StatRow
+            label="Average Time"
+            value={formatTime(avgTime)}
+          />
+        </View>
+
+        {/* BY MODE */}
+        <View style={styles.card}>
+          <Text style={styles.cardTitle}>By Mode</Text>
+
+          {modes.map(mode => {
+            const games = history.filter(h => h.mode === mode);
+            const winsForMode = games.filter(h => h.win);
+            const bestTime =
+              winsForMode.length > 0
+                ? Math.min(...winsForMode.map(g => g.time))
+                : null;
+
+            return (
+              <View key={mode} style={styles.modeRow}>
+                <Text style={styles.mode}>
+                  {modeIcon(mode)} {mode.toUpperCase()}
+                </Text>
+
+                <View style={styles.modeStats}>
+                  <Text style={styles.modeStat}>
+                    Games: {games.length}
+                  </Text>
+                  <Text style={styles.modeStat}>
+                    Best:{" "}
+                    {bestTime !== null
+                      ? formatTime(bestTime)
+                      : "-"}
+                  </Text>
+                </View>
               </View>
-            ) : (
-              <Text style={styles(colors).line}>No achievements yet.</Text>
-            )}
-          </View>
-
-          <View style={styles(colors).card}>
-            <Text style={styles(colors).cardTitle}>Badges</Text>
-            {stats.badges.length ? (
-              <View style={styles(colors).badgeRow}>
-                {stats.badges.map((b, i) => (
-                  <View key={i} style={styles(colors).badge}>
-                    <Text style={styles(colors).badgeText}>{b}</Text>
-                  </View>
-                ))}
-              </View>
-            ) : (
-              <Text style={styles(colors).line}>No badges yet.</Text>
-            )}
-          </View>
-<View style={styles(colors).card}>
-  <Text style={styles(colors).cardTitle}>How Progress Works</Text>
-
-  <Text style={styles(colors).line}>
-    Progress is earned through valid game completions under fixed rules.
-  </Text>
-
-  <Text style={styles(colors).line}>
-    Rank reflects long-term performance, not short-term spikes.
-  </Text>
-
-  <Text style={styles(colors).line}>
-    Difficulty, accuracy, and consistency affect progress.
-  </Text>
-
-  <Text style={styles(colors).line}>
-    Cosmetic actions, retries, and device speed do not.
-  </Text>
-
-  <Text style={styles(colors).line}>
-    All players play by the same rules.
-  </Text>
-</View>
-
-      
+            );
+          })}
         </View>
       </ScrollView>
     </ImageBackground>
   );
 }
 
-export default function StatsScreen() {
+function StatRow({ label, value }: { label: string; value: any }) {
   return (
-    <RequireAuth>
-      <StatsInner />
-    </RequireAuth>
+    <View style={styles.statRow}>
+      <Text style={styles.statLabel}>{label}</Text>
+      <Text style={styles.statValue}>{value}</Text>
+    </View>
   );
 }
 
-const styles = (colors: ReturnType<typeof getColors>) =>
-  StyleSheet.create({
-    bg: { flex: 1 },
-    scroll: {
-      paddingHorizontal: theme.spacing.padding,
-      alignItems: "stretch",
-    },
-    container: { width: "100%" },
-    title: {
-      fontSize: 26,
-      fontWeight: "800",
-      color: "#FBE7A1",
-      marginBottom: 20,
-      textAlign: "left",
-    },
-    card: {
-      backgroundColor: "rgba(0,0,30,0.65)",
-      borderRadius: 18,
-      padding: 16,
-      marginBottom: 16,
-      borderWidth: 1,
-      borderColor: "rgba(255,255,255,0.15)",
-    },
-    cardTitle: {
-      fontSize: 16,
-      fontWeight: "700",
-      color: "#FBE7A1",
-      marginBottom: 8,
-    },
-    line: {
-      fontSize: 13,
-      color: "#FFFFFF",
-      marginVertical: 2,
-    },
-    badgeRow: {
-      flexDirection: "row",
-      flexWrap: "wrap",
-      marginTop: 6,
-    },
-    badge: {
-      backgroundColor: "#FFD86A",
-      borderRadius: 14,
-      paddingHorizontal: 10,
-      paddingVertical: 5,
-      margin: 4,
-    },
-    badgeText: {
-      fontSize: 12,
-      fontWeight: "700",
-      color: "#3B2A00",
-    },
-    button: {
-      marginTop: 14,
-      backgroundColor: "#FFD86A",
-      paddingVertical: 12,
-      borderRadius: 24,
-      alignItems: "center",
-    },
-    buttonText: {
-      color: "#3B2A00",
-      fontWeight: "700",
-      fontSize: 15,
-    },
-    streakBar: {
-      height: 24,
-      backgroundColor: "rgba(255,255,255,0.15)",
-      borderRadius: 12,
-      marginTop: 6,
-      overflow: "hidden",
-      justifyContent: "center",
-    },
-    streakFill: {
-      position: "absolute",
-      left: 0,
-      top: 0,
-      bottom: 0,
-      backgroundColor: "#D8B24A",
-    },
-    streakText: {
-      fontSize: 11,
-      color: "#fff",
-      textAlign: "center",
-      fontWeight: "600",
-    },
-  });
+/* ================= STYLES ================= */
+
+const styles = StyleSheet.create({
+  bg: { flex: 1 },
+
+  container: {
+    padding: 20,
+    paddingTop: 40,
+  },
+
+  center: {
+    flex: 1,
+    justifyContent: "center",
+    alignItems: "center",
+    backgroundColor: "#061B3A",
+  },
+
+  title: {
+    fontFamily: "BalooBold",
+    fontSize: 24,
+    color: "#FBE7A1",
+    textAlign: "center",
+    marginBottom: 6,
+  },
+
+  subtitle: {
+    fontFamily: "BalooRegular",
+    fontSize: 11,
+    color: "rgba(255,255,255,0.7)",
+    textAlign: "center",
+    marginBottom: 24,
+  },
+
+  emptyText: {
+    color: "rgba(255,255,255,0.7)",
+    fontSize: 14,
+  },
+
+  card: {
+    width: "100%",
+    backgroundColor: "rgba(0,0,40,0.6)",
+    borderRadius: 18,
+    padding: 20,
+    marginBottom: 24,
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.25)",
+  },
+
+  cardTitle: {
+    fontSize: 14,
+    fontWeight: "800",
+    color: "#FBE7A1",
+    marginBottom: 12,
+  },
+
+  statRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    marginBottom: 8,
+  },
+
+  statLabel: {
+    color: "rgba(255,255,255,0.75)",
+    fontSize: 13,
+  },
+
+  statValue: {
+    color: "#FFFFFF",
+    fontSize: 13,
+    fontWeight: "800",
+  },
+
+  modeRow: {
+    marginBottom: 14,
+  },
+
+  mode: {
+    fontSize: 14,
+    fontWeight: "800",
+    color: "#FFFFFF",
+    marginBottom: 4,
+  },
+
+  modeStats: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+  },
+
+  modeStat: {
+    fontSize: 12,
+    color: "rgba(255,255,255,0.7)",
+  },
+});

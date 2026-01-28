@@ -37,9 +37,7 @@ import { saveWin } from "../src/lib/saveWin";
 import UniversalModal from "./components/UniversalModal";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { writeSeasonalScore, getCurrentStreak } from "../utils/ladder/scoreEngine";
-
-
-
+import { onGameFinished } from "../src/game/onGameFinished";
 
 // ===== Layout constants
 const { width } = Dimensions.get("window");
@@ -127,6 +125,10 @@ useEffect(() => {
 
   const MAX_STRIKES = 5;
   const gameOverShown = useRef(false);
+// ✅ Classic-style finalize guards (prevents zombie resume / late saves)
+const winHandledRef = useRef(false);
+const skipNextResumeRef = useRef(false);
+const skipNextSaveRef = useRef(false);
 
   const [blinkCells, setBlinkCells] = useState<[number, number][]>([]);
   const blinkAnim = useRef(new Animated.Value(1)).current;
@@ -155,6 +157,12 @@ const controlsLocked = gameWon || winVisible || gameOverVisible;
   // ===== Load/resume
 useFocusEffect(
   useCallback(() => {
+        // 🚫 If we just finalized/closed a finished game, do NOT show resume
+    if (skipNextResumeRef.current) {
+      skipNextResumeRef.current = false;
+      return;
+    }
+
     let alive = true;
 
     (async () => {
@@ -200,12 +208,20 @@ useFocusEffect(
 
         const validTimer = saved && typeof saved.timer === "number";
 
-        if (alive && validPuzzle && validCages && validTimer) {
-          setResumeData(saved);
-          setResumeVisible(true);
-        } else {
-          startNewBoard();
-        }
+       if (
+  alive &&
+  validPuzzle &&
+  validCages &&
+  validTimer &&
+  isBoardTouched(saved.puzzle)
+) {
+  setResumeData(saved);
+  setResumeVisible(true);
+} else {
+  await clearGame("killer"); // 🧠 discard pristine save
+  startNewBoard();
+}
+
       } catch {
         startNewBoard();
       }
@@ -218,6 +234,7 @@ useFocusEffect(
 );
 
   // React to difficulty changes (matches Hyper/X)
+
 useEffect(() => {
   if (puzzle && puzzle.length > 0) {
     console.log(" [Killer] Difficulty changed -> starting new board:", difficulty);
@@ -274,6 +291,38 @@ console.log("CAGE SAMPLE:", cageData[0]);
   };
 
   const clone = (p: Cell[][]) => JSON.parse(JSON.stringify(p));
+  const persistKiller = (
+  board: Cell[][],
+  overrides?: Partial<{
+    timer: number;
+    errorCount: number;
+    hintsLeft: number;
+    difficulty: "easy" | "medium" | "hard";
+  }>
+) => {
+  saveGame("killer", {
+    puzzle: board,
+    cages,
+    timer: overrides?.timer ?? timer,
+    errorCount: overrides?.errorCount ?? errorCount,
+    hintsLeft: overrides?.hintsLeft ?? hintsLeft,
+    difficulty: overrides?.difficulty ?? difficulty,
+  });
+};
+
+  const isBoardTouched = (board: Cell[][] | null) => {
+  if (!Array.isArray(board)) return false;
+
+  for (const row of board) {
+    for (const cell of row) {
+      if (!cell?.prefilled && cell?.value != null) return true;
+      if (Array.isArray(cell?.notes) && cell.notes.length > 0) return true;
+    }
+  }
+
+  return false;
+};
+
   const pushHistory = () => {
     setHistory((h) => [...h, clone(puzzle)]);
     setRedoStack([]);
@@ -345,8 +394,10 @@ try { Haptics.selectionAsync(); } catch {}
       const i = next[r][c].notes.indexOf(num);
       if (i === -1) next[r][c].notes.push(num);
       else next[r][c].notes.splice(i, 1);
-      setPuzzle(next);
-      saveGame("killer", { puzzle: next, cages, timer });
+    setPuzzle(next);
+persistKiller(next);
+
+
       recomputeBadCages(next);
       return;
     }
@@ -354,15 +405,23 @@ try { Haptics.selectionAsync(); } catch {}
     pushHistory();
     const next = clone(puzzle);
     next[r][c].value = num;
-    setPuzzle(next);
-    saveGame("killer", { puzzle: next, cages, timer });
+  setPuzzle(next);
 
-    if (num !== next[r][c].solution) {
-      setErrorCount((e) => Math.min(e + 1, MAX_STRIKES));
-      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
-    } else {
-      Haptics.selectionAsync();
-    }
+const nextErrors =
+  num !== next[r][c].solution
+    ? Math.min(errorCount + 1, MAX_STRIKES)
+    : errorCount;
+
+if (num !== next[r][c].solution) {
+  setErrorCount(nextErrors);
+  Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+} else {
+  Haptics.selectionAsync();
+}
+
+// ✅ save the SAME board + the UPDATED strike count
+persistKiller(next, { errorCount: nextErrors });
+
 
     checkRowColBoxCompletion(next, r, c);
     recomputeBadCages(next);
@@ -376,8 +435,10 @@ try { Haptics.selectionAsync(); } catch {}
     pushHistory();
     const next = clone(puzzle);
     next[r][c].value = null;
-    setPuzzle(next);
-    saveGame("killer", { puzzle: next, cages, timer });
+   setPuzzle(next);
+persistKiller(next);
+
+
     recomputeBadCages(next);
   };
 
@@ -387,10 +448,16 @@ try { Haptics.selectionAsync(); } catch {}
     pushHistory();
     const next = clone(puzzle);
     next[r][c].value = next[r][c].solution;
-    setPuzzle(next);
-    saveGame("killer", { puzzle: next, cages, timer });
-    recomputeBadCages(next);
-    setHintsLeft((h) => h - 1);
+  setPuzzle(next);
+
+const nextHints = Math.max(0, hintsLeft - 1);
+setHintsLeft(nextHints);
+
+// ✅ save board + updated hints
+persistKiller(next, { hintsLeft: nextHints });
+
+recomputeBadCages(next);
+
     Haptics.selectionAsync();
     checkCompletion(next);
   };
@@ -408,8 +475,10 @@ try { Haptics.selectionAsync(); } catch {}
     if (redoStack.length === 0) return;
     const [next, ...rest] = redoStack;
     setHistory((h) => [...h, clone(puzzle)]);
-    setPuzzle(next);
-    saveGame("killer", { puzzle: next, cages, timer });
+ setPuzzle(next);
+persistKiller(next);
+
+
     setRedoStack(rest);
     recomputeBadCages(next);
   };
@@ -452,10 +521,26 @@ try { Haptics.selectionAsync(); } catch {}
 
 
  const handleWin = async () => {
-  if (gameWon) return;
+  // ✅ run only once
+  if (winHandledRef.current) return;
+  winHandledRef.current = true;
+
+  // 🔒 FINALIZE: no resume + no save after win
+  skipNextResumeRef.current = true;
+  skipNextSaveRef.current = true;
+
   setHasWon(true);
-  clearGame("killer");
   setGameWon(true);
+
+  // stop timer immediately
+  if (timerRef.current) {
+    clearInterval(timerRef.current);
+    timerRef.current = null;
+  }
+
+  // ✅ clear saved killer game (await to avoid race)
+  await clearGame("killer");
+
 
   // ✅ Use the real app username (not email)
   const ladderUser = username || auth.currentUser?.email || "Guest";
@@ -502,7 +587,17 @@ try { Haptics.selectionAsync(); } catch {}
 
   setPuzzle(solved);
 
-  if (timerRef.current) clearInterval(timerRef.current);
+  // timer already stopped at finalize
+
+// ✅ HISTORY (UNIFIED PATTERN)
+await onGameFinished({
+  mode: "killer",
+  win: true,
+  time: timer,
+  errors: errorCount,
+});
+
+
   setWinVisible(true);
 
   // Save win history
@@ -574,17 +669,27 @@ setResumeData(null);
   router.replace("/variantHub");
 };
 
-
- useEffect(() => {
+useEffect(() => {
   return () => {
-   if (hasWon || gameOverVisible) return;
-// do NOT save until puzzle is a real  grid
+    if (hasWon || gameOverVisible) return;
+        if (skipNextSaveRef.current) {
+      skipNextSaveRef.current = false;
+      return;
+    }
+
     if (!Array.isArray(puzzle) || puzzle.length !== 9) return;
     if (!puzzle.every(row => Array.isArray(row) && row.length === 9)) return;
 
-    saveGame("killer", { puzzle, cages, timer });
+    // 🧠 do not save untouched boards
+    if (!isBoardTouched(puzzle)) return;
+
+ persistKiller(puzzle);
+
+
+
   };
 }, [puzzle, cages, timer, hasWon]);
+
 
 
   const getDigitCounts = () => {
@@ -1009,10 +1114,18 @@ isContext={contextCells.some(([rr, cc]) => rr === r && cc === c)}
   time={timer}
   onPlayAgain={startNewBoard}
   onRestart={startNewBoard}
-  onClose={async () => {
+   onClose={async () => {
+    // prevent resume/save after leaving a finished board
+    skipNextResumeRef.current = true;
+    skipNextSaveRef.current = true;
+
     await clearGame("killer");
     setWinVisible(false);
+
+    // exit screen so user can't sit on a finished board
+    router.replace("/variantHub");
   }}
+
   difficulty={difficulty}
   isDaily={false}
 />
@@ -1023,17 +1136,23 @@ isContext={contextCells.some(([rr, cc]) => rr === r && cc === c)}
     title="Resume Game?"
     message="Would you like to continue your previous Killer puzzle?"
     actions={[
-      {
-        label: "YES",
-        onPress: () => {
-          if (resumeData) {
-            setPuzzle(resumeData.puzzle);
-            if (resumeData.cages) setCages(resumeData.cages);
-            setTimer(typeof resumeData.timer === "number" ? resumeData.timer : 0);
-            resumeTimer();
-          }
-          setResumeVisible(false);
-        },
+     {
+  label: "YES",
+  onPress: () => {
+    if (resumeData) {
+      setPuzzle(resumeData.puzzle);
+      if (resumeData.cages) setCages(resumeData.cages);
+
+      setTimer(typeof resumeData.timer === "number" ? resumeData.timer : 0);
+      setErrorCount(resumeData.errorCount ?? 0);
+      setHintsLeft(resumeData.hintsLeft ?? 3);
+      setDifficulty(resumeData.difficulty ?? "easy");
+
+      resumeTimer();
+    }
+    setResumeVisible(false);
+  },
+
       },
       {
         label: "NO",

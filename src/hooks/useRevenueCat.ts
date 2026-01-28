@@ -1,29 +1,29 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Purchases from "react-native-purchases";
 import type { CustomerInfo, PurchasesOfferings } from "react-native-purchases";
 
+/**
+ * Single source of truth for Premium state
+ * - Premium = entitlement id "premium"
+ * - Free until proven otherwise
+ * - Silent restore on app start
+ */
 export function useRevenueCat() {
-    let refreshing = false;
+  const refreshingRef = useRef(false);
 
   const [customerInfo, setCustomerInfo] = useState<CustomerInfo | null>(null);
   const [offerings, setOfferings] = useState<PurchasesOfferings | null>(null);
 
-  // 🔒 DEFAULT: FREE until proven otherwise
   const [isPremium, setIsPremium] = useState(false);
   const [loading, setLoading] = useState(true);
-
-  // NOTE:
-  // "premium" is the canonical entitlement ID configured in RevenueCat
-  // All premium checks across the app MUST use this hook
-
 
   const computeIsPremium = (info: CustomerInfo | null) => {
     return Boolean(info?.entitlements.active["premium"]);
   };
 
-   const refreshCustomerInfo = async () => {
-    if (refreshing) return;
-    refreshing = true;
+  const refreshCustomerInfo = async () => {
+    if (refreshingRef.current) return;
+    refreshingRef.current = true;
 
     try {
       setLoading(true);
@@ -31,37 +31,29 @@ export function useRevenueCat() {
       setCustomerInfo(info);
       setIsPremium(computeIsPremium(info));
     } catch {
-      // On ANY failure → treat as FREE
       setCustomerInfo(null);
       setIsPremium(false);
     } finally {
       setLoading(false);
-      refreshing = false;
+      refreshingRef.current = false;
     }
   };
-
 
   useEffect(() => {
     let alive = true;
 
-    // 🧹 RESET LOCAL STATE ON MOUNT
-    setCustomerInfo(null);
-    setIsPremium(false);
-    setLoading(true);
-
-    // 🔄 Explicit refresh
+    // Silent restore on mount
     refreshCustomerInfo();
 
-    // 🔔 Listen for RevenueCat updates (login / restore / purchase)
+    // Listen for purchase / restore updates
     const listener = Purchases.addCustomerInfoUpdateListener((info) => {
-  if (!alive) return;
-  setCustomerInfo(info);
-  setIsPremium(computeIsPremium(info));
-  setLoading(false);
-});
+      if (!alive) return;
+      setCustomerInfo(info);
+      setIsPremium(computeIsPremium(info));
+      setLoading(false);
+    });
 
-
-    // 🛒 Offerings are optional and non-fatal
+    // Offerings are optional (non-fatal)
     Purchases.getOfferings()
       .then((offs) => alive && setOfferings(offs))
       .catch(() => {});
@@ -77,6 +69,6 @@ export function useRevenueCat() {
     loading,
     customerInfo,
     offerings,
-    refresh: refreshCustomerInfo, // explicit manual refresh if needed
+    refresh: refreshCustomerInfo,
   };
 }

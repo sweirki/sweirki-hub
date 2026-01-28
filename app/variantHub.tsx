@@ -214,7 +214,7 @@ function AnimatedTile({
   {/* 🔒 LOCK BADGE — MUST BE LAST */}
   {locked && (
     <View style={styles.lockBadge}>
-      <Text style={styles.lockText}>🔒 Premium required</Text>
+      <Text style={styles.lockText}>🔒 Premium</Text>
     </View>
   )}
 
@@ -243,7 +243,7 @@ const styles = StyleSheet.create({
   container: {
   flex: 1,
   width: "100%",
-  paddingTop: 120,
+  paddingTop: 64,
   alignItems: "center",
 },
 
@@ -280,15 +280,15 @@ const styles = StyleSheet.create({
 
 lockBadge: {
   position: "absolute",
-  bottom: 14,
+  bottom: 10,
   alignSelf: "center",
-  backgroundColor: "rgba(0,0,0,0.75)",
-  paddingHorizontal: 10,
-  paddingVertical: 3,
+  backgroundColor: "rgba(0,0,0,0.05)",
+  paddingHorizontal: 32,
+  paddingVertical: 2,
   borderRadius: 10,
 },
 lockText: {
-  fontSize: 11,
+  fontSize: 8,
   color: "#F3C969",
 
 },
@@ -334,20 +334,20 @@ subtitle: {
  row: {
   flexDirection: "row",
   justifyContent: "space-between",
+  marginBottom: -18,
+},
+
+centerRow: {
+  flexDirection: "row",
+  justifyContent: "center",
+  marginTop: 0,    // 👈 pull it up
   marginBottom: 0,
 },
 
 
- centerRow: {
-  flexDirection: "row",
-  justifyContent: "center",
-  marginBottom: 6,
-},
-
-
  tileWrapper: {
-  marginVertical: -10,
-  marginHorizontal: -12,
+  marginVertical: -6,
+  marginHorizontal: -10,
 },
 
 
@@ -367,15 +367,14 @@ subtitle: {
 
  lastPlayedText: {
   position: "absolute",
-  bottom: 23,
+  bottom: 14,           // 👈 closer to tile
   alignSelf: "center",
-  fontSize: 12,
+  fontSize: 9,         // 👈 subtler
   fontWeight: "600",
   color: "#FFD873",
-  textShadowColor: "#FFD873",
-  textShadowOffset: { width: 0, height: 0 },
-  textShadowRadius: 8,
+  opacity: 0.85,        // 👈 less shouty
 },
+
 
 buttonImg: {
   width: 190,

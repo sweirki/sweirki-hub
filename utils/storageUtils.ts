@@ -1,6 +1,6 @@
-﻿import AsyncStorage from "@react-native-async-storage/async-storage";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 
-// ðŸ”’ Unified, safe, atomic Sudoku save format
+// Unified, safe, atomic Sudoku save format
 interface SudokuSave {
   version: number;
   puzzle: any;
@@ -8,11 +8,13 @@ interface SudokuSave {
   timer: number;
   hintsLeft: number;
   difficulty: string;
+  errorCount: number; // ✅ persist strikes
   cages?: any; // killer only
 }
 
+
 // --------------------------------------
-// ðŸ”¥ SAFE SAVE (Atomic)
+// SAFE SAVE (Atomic)
 // --------------------------------------
 export const saveGame = async (key: string, data: any) => {
   try {
@@ -26,10 +28,14 @@ export const saveGame = async (key: string, data: any) => {
       hintsLeft:
         typeof data.hintsLeft === "number" ? data.hintsLeft : data.hints || 3,
 
-      difficulty:
+           difficulty:
         typeof data.difficulty === "string" ? data.difficulty : "easy",
 
+      errorCount:
+        typeof data.errorCount === "number" ? data.errorCount : 0,
+
       cages: data.cages ?? undefined,
+
     };
 
     // atomic write: write to temp â†’ then commit
@@ -43,7 +49,7 @@ export const saveGame = async (key: string, data: any) => {
 };
 
 // --------------------------------------
-// ðŸ”¥ SAFE LOAD (Backward Compatible)
+// SAFE LOAD (Backward Compatible)
 // --------------------------------------
 export const loadGame = async (key: string) => {
   try {
@@ -65,11 +71,16 @@ export const loadGame = async (key: string) => {
         typeof parsed.hintsLeft === "number"
           ? parsed.hintsLeft
           : parsed.hints ?? 3,
-      difficulty:
+          difficulty:
         typeof parsed.difficulty === "string"
           ? parsed.difficulty
           : "easy",
+
+      errorCount:
+        typeof parsed.errorCount === "number" ? parsed.errorCount : 0,
+
       cages: parsed.cages ?? undefined,
+
     } as SudokuSave;
   } catch (err) {
     console.warn("loadGame failed:", err);
@@ -78,7 +89,7 @@ export const loadGame = async (key: string) => {
 };
 
 // --------------------------------------
-// ðŸ”¥ CLEAR GAME
+// CLEAR GAME
 // --------------------------------------
 export const clearGame = async (key: string) => {
   try {

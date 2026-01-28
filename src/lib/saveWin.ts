@@ -2,13 +2,23 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { auth, db } from "../../firebase";
 import { safeFirestoreCall } from "../utils/firestoreSafe";
+import { awardLadderXP } from "../../app/lib/ladderBridge";
 
 /**
  * Single source of truth for ALL leaderboard writes
- * - Daily  -> dailyLeaderboard
- * - Normal -> leaderboard
- * - Daily lock is set ONLY after successful Firestore write
+ * - Daily   -> leaderboard (period: "daily", dailyId)
+ * - Normal  -> leaderboard (period: "season", seasonId)
+ * - Ladder XP is awarded ONLY for non-daily wins
  */
+
+const SEASON_LENGTH_DAYS = 28;
+const SEASON_START = new Date("2025-01-01").getTime();
+
+function getCurrentSeasonId() {
+  const diffDays = Math.floor((Date.now() - SEASON_START) / 86400000);
+  return Math.floor(diffDays / SEASON_LENGTH_DAYS);
+}
+
 export async function saveWin(
   username: string,
   difficulty: string,
@@ -17,18 +27,15 @@ export async function saveWin(
   isDaily: boolean = false
 ) {
   const uid = auth.currentUser?.uid ?? null;
-  const today = new Date().toISOString().slice(0, 10);
+  if (!uid) return;
+
+  const todayId = new Date().toISOString().slice(0, 10);
+  const seasonId = getCurrentSeasonId();
 
   // 🔓 Always clear dailyPlayed first (re-locked only after success)
   await AsyncStorage.removeItem("dailyPlayed");
 
-  console.log("🚨 saveWin CALLED", {
-    username,
-    difficulty,
-    time,
-    errors,
-    isDaily,
-  });
+  const points = Math.max(0, 1000 - time - errors * 50);
 
   const winData = {
     uid,
@@ -36,42 +43,32 @@ export async function saveWin(
     difficulty,
     time,
     errors,
-    points: Math.max(0, 1000 - time - errors * 50), // simple deterministic score
-    period: isDaily ? "daily" : "weekly",
+    points,
+    period: isDaily ? "daily" : "season",
+    seasonId: isDaily ? null : seasonId,
+    dailyId: isDaily ? todayId : null,
     createdAt: serverTimestamp(),
   };
 
-  console.log("🟡 saveWin reached guarded block", winData);
-
-  // 🔒 HARD FIRESTORE GUARD — NOTHING BELOW CAN CRASH UI
   await safeFirestoreCall(async () => {
     try {
-      // 1️⃣ Drop legacy pending wins (old schema)
+      // 1️⃣ Clear legacy pending wins
       await AsyncStorage.removeItem("pendingWins");
 
-      // 2️⃣ Write THIS win (creates collection if missing)
-      console.log("🟠 about to write leaderboard doc");
-
-      await addDoc(
-        collection(db, "leaderboard"),
-        winData
-      );
-
-      console.log("🟢 addDoc resolved");
-
-      console.log(
-        "🔥 Firestore write OK:",
-        isDaily ? "dailyLeaderboard" : "leaderboard",
-        winData
-      );
+      // 2️⃣ Write leaderboard entry
+      await addDoc(collection(db, "leaderboard"), winData);
 
       // 3️⃣ Lock Daily ONLY after successful write
       if (isDaily) {
-        await AsyncStorage.setItem("dailyPlayed", today);
-        console.log("🔒 Daily locked for", today);
+        await AsyncStorage.setItem("dailyPlayed", todayId);
       }
 
-      // 4️⃣ Update profile streak / win counters (NOT leaderboard logic)
+      // 4️⃣ Award ladder XP ONLY for non-daily wins
+      if (!isDaily) {
+        await awardLadderXP(points);
+      }
+
+      // 5️⃣ Update user profile streak / win counters (not ladder logic)
       if (username) {
         const userRef = doc(db, "users", username);
         const snap = await getDoc(userRef);
@@ -80,7 +77,7 @@ export async function saveWin(
           const data = snap.data();
 
           const nextStreak =
-            data.streakDate === today
+            data.streakDate === todayId
               ? data.streakCount
               : (data.streakCount || 0) + 1;
 
@@ -89,7 +86,7 @@ export async function saveWin(
             {
               winCount: (data.winCount || 0) + 1,
               streakCount: nextStreak,
-              streakDate: today,
+              streakDate: todayId,
             },
             { merge: true }
           );
@@ -99,7 +96,7 @@ export async function saveWin(
             {
               winCount: 1,
               streakCount: 1,
-              streakDate: today,
+              streakDate: todayId,
             },
             { merge: true }
           );
@@ -108,11 +105,9 @@ export async function saveWin(
 
       console.log(isDaily ? "✅ Daily win saved" : "✅ Win saved");
     } catch (error) {
-      // ⚠️ This catch is INSIDE the guard — never reaches UI
       console.error("🔴 saveWin FAILED (guarded)", error);
 
-      console.warn("⚠️ Offline or Firestore error — queueing win");
-
+      // Queue win for offline retry
       try {
         const existing = (await AsyncStorage.getItem("pendingWins")) || "[]";
         const updated = JSON.parse(existing);

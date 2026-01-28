@@ -5,6 +5,7 @@ import { generateKillerCages } from "../utils/sudokuGen";
 import { auth } from "../firebase"; // check if logged in
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { recordGameResult } from "../src/analytics/playerAnalytics";
+import { onGameFinished } from "../src/game/onGameFinished";
 
 import {
   View,
@@ -60,13 +61,21 @@ interface SudokuProps {
   }) => void;
   isDaily?: boolean;
   onDailyWin?: (result: any) => void;
+    onDailyLose?: () => void;
+
   initialPuzzle?: any;
 }
 
-
 export default function SudokuScreen(
-  { onWin, isDaily: isDailyProp = false, onDailyWin, initialPuzzle }: SudokuProps
+  {
+    onWin,
+    isDaily: isDailyProp = false,
+    onDailyWin,
+    onDailyLose,
+    initialPuzzle,
+  }: SudokuProps
 )
+
 {
  const unlockAchievement = useAchievementsStore((s) => s.unlock);
  
@@ -171,20 +180,22 @@ const [difficulty, setDifficulty] = useState(
 // Game Over popup logic (must be before return, inside hook zone)
 const [gameOverVisible, setGameOverVisible] = useState(false);
 const gameOverShown = useRef(false);
-
 useEffect(() => {
   if (errorCount >= 4 && !gameOverShown.current) {
     gameOverShown.current = true;
+
+    // 🔒 DAILY: one attempt only
+    if (isDaily && onDailyLose) {
+      onDailyLose();
+      return;
+    }
+
+    // non-daily behavior unchanged
     setGameOverVisible(true);
   }
-}, [errorCount]);
-useEffect(() => {
-  if (isDaily) return;
-  if (resumeVisible) return; // ✅ DO NOT restart during resume
-  if (level) {
-    handleRestart(level.toString());
-  }
-}, [level, isDaily, resumeVisible]);
+}, [errorCount, isDaily, onDailyLose]);
+
+
 
   const [blinkCells, setBlinkCells] = useState<[number, number][]>([]);
   const [contextCells, setContextCells] = useState<[number, number][]>([]);
@@ -196,27 +207,49 @@ const postWinTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
 const drawerAnim = useRef(new Animated.Value(300)).current;
 const winHandledRef = useRef(false);
+const skipNextResumeRef = useRef(false);
+const forceFreshStartRef = useRef(false);
+const skipNextSaveRef = useRef(false);
+const restartingFromWinRef = useRef(false);
+
 
 // ✅ AUTO-RESUME (CLASSIC ONLY) — refresh on every focus
+
 useFocusEffect(
   useCallback(() => {
     if (isDaily) return;
+    if (skipNextResumeRef.current) {
+      skipNextResumeRef.current = false;
+      return;
+    }
+
 
     let alive = true;
 
     (async () => {
-      try {
+        try {
+        const finished = await AsyncStorage.getItem("gameFinished");
+        if (finished === "true") {
+          // win already happened -> never offer resume
+          await AsyncStorage.removeItem("gameFinished");
+          await clearGame("classic");
+          return;
+        }
+
         const saved = await loadGame("classic");
 
         if (
           alive &&
           saved &&
           Array.isArray(saved.puzzle) &&
-          saved.puzzle.length === 9
+          saved.puzzle.length === 9 &&
+          isBoardTouched(saved.puzzle)
         ) {
-          setResumeData(saved);       // ✅ always latest save
+          setResumeData(saved);
           setResumeVisible(true);
         }
+
+
       } catch {}
     })();
 
@@ -230,8 +263,19 @@ useFocusEffect(
   useCallback(() => {
     return () => {
       if (isDaily) return;
-      if (!puzzle) return;
-      if (winVisible) return;
+
+      // 🚫 do not save after Game Over → Close
+      if (skipNextSaveRef.current) {
+        skipNextSaveRef.current = false;
+        return;
+      }
+
+    if (!puzzle) return;
+if (winVisible) return;
+
+// 🧠 do not save pristine boards
+if (!isBoardTouched(puzzle)) return;
+
 
       saveGame("classic", {
         puzzle,
@@ -245,7 +289,6 @@ useFocusEffect(
     };
   }, [isDaily, puzzle, winVisible, time, hintsLeft, difficulty, errorCount])
 );
-
 
 
 
@@ -302,6 +345,22 @@ useEffect(() => {
       })
     );
     setDigitCounts(counts);
+  };
+
+    const isBoardTouched = (board: any[][] | null) => {
+    if (!Array.isArray(board)) return false;
+
+    for (const row of board) {
+      for (const cell of row) {
+        // entered number
+        if (!cell.prefilled && cell.value != null) return true;
+
+        // pencil notes
+        if (Array.isArray(cell.notes) && cell.notes.length > 0) return true;
+      }
+    }
+
+    return false;
   };
 
   // ---------- Placement ----------
@@ -571,6 +630,8 @@ if (won && !gameWon && !winHandledRef.current) {
     const level = typeof levelInput === "string" ? levelInput : difficulty;
     setDifficulty(level);
 AsyncStorage.removeItem("activeGame"); // clear old autosave
+AsyncStorage.removeItem("gameFinished");
+
     const newBoard = generateSudoku(level);
     if (level === "killer") {
   const solution = newBoard.map(r => r.map(c => c.solution));
@@ -589,19 +650,45 @@ AsyncStorage.removeItem("activeGame"); // clear old autosave
     setErrorCount(0);
   };
 
+  // 🔒 WinModal helpers — MUST be here (component scope, before return)
+
+const handleWinCloseToHub = () => {
+  requestAnimationFrame(() => {
+    router.replace("/variantHub");
+  });
+};
+
+const handleWinRestart = (level: string) => {
+  requestAnimationFrame(() => {
+    AsyncStorage.removeItem("gameFinished");
+    clearGame(isDaily ? "daily" : "classic");
+    handleRestart(level);
+  });
+};
+
 const handleWin = async () => {
   if (winHandledRef.current) return;
   winHandledRef.current = true;
 
- if (timerRef.current) {
-  clearInterval(timerRef.current);
-}
+  // 🔒 FINALIZE: no resume + no autosave after a win
+  skipNextResumeRef.current = true;
+  skipNextSaveRef.current = true;
+  await AsyncStorage.setItem("gameFinished", "true");
 
+  // also delete any saved autosave so resume never triggers
+  await clearGame("classic");
+
+  if (timerRef.current) {
+    clearInterval(timerRef.current);
+    timerRef.current = null;
+  }
 
   blinkAnim.stopAnimation();
   setBlinkCells([]);
 
- setWinVisible(true);
+  setGameWon(true);
+  setWinVisible(true);
+
 
 if (isDaily) {
   setWinVisible(true);
@@ -621,6 +708,7 @@ if (isDaily) {
         streak: 0,
       }),
     });
+    
   }
 
   return;
@@ -675,6 +763,14 @@ if (isDaily) {
       false
     );
 
+// ✅ ADD THIS
+await onGameFinished({
+  mode: "classic",
+  win: true,
+  time,
+  errors: errorCount,
+});
+    
 // 📊 Phase 8A — record Classic analytics (canonical, non-blocking)
 recordGameResult({
   username: auth.currentUser?.uid,
@@ -707,6 +803,7 @@ try {
   }
 }, 0);
 };
+
 const handleGameOverClose = async () => {
   // 1️⃣ Stop timer
   if (timerRef.current) {
@@ -716,6 +813,13 @@ const handleGameOverClose = async () => {
 
   // 2️⃣ Clear saved game
   await clearGame("classic");
+// 🚫 block auto-save AFTER game over close
+skipNextSaveRef.current = true;
+  // 🚫 IMPORTANT: block next auto-resume
+  skipNextResumeRef.current = true;
+  forceFreshStartRef.current = true;
+  setResumeData(null);
+  setResumeVisible(false);
 
   // 3️⃣ Clear board + state
   setPuzzle(null);
@@ -737,9 +841,10 @@ const handleGameOverClose = async () => {
   // 5️⃣ Close modal
   setGameOverVisible(false);
 
-  // 6️⃣ Navigate to Variant screen
- router.replace("/variantHub");
+  // 6️⃣ Navigate out
+  router.replace("/variantHub");
 };
+
 
   // ---------- Drawer Animation ----------
 
@@ -1130,16 +1235,9 @@ blurRadius={Platform.OS === "android" ? 0 : (winVisible ? 0 : 5)}
       setHistory([]);
       setRedoStack([]);
 
-      const computedErrors = rebuilt.flat().filter(
-        (cell: any) =>
-          cell.value &&
-          cell.value !== cell.solution &&
-          !cell.prefilled
-      ).length;
+    setErrorCount(resumeData.errorCount ?? 0);
 
-      setErrorCount(computedErrors);
-
-      setHintsLeft(resumeData.hintsLeft ?? 3);
+     setHintsLeft(resumeData.hintsLeft ?? 3);
       setTime(resumeData.timer ?? 0);
       setDifficulty(resumeData.difficulty ?? "easy");
       updateDigitCounts(rebuilt);
@@ -1222,20 +1320,51 @@ blurRadius={Platform.OS === "android" ? 0 : (winVisible ? 0 : 5)}
 
 
     {/* ✅ Win Modal only mounts when visible */}
-    {winVisible && (
-      <WinModal
-        visible={winVisible}
-        // stay on the same board, no navigation
-        onClose={async () => {
-          await clearGame("classic");
-          setWinVisible(false);
-        }}
-        // Restart the puzzle in place
-        onRestart={(level) => handleRestart(level)}
-        difficulty={difficulty}
-        isDaily={isDaily}
-      />
-    )}
+ {winVisible && (
+  <WinModal
+    visible={winVisible}
+
+onClose={() => {
+  // 🔒 block resume & autosave
+  skipNextResumeRef.current = true;
+  skipNextSaveRef.current = true;
+
+  // clear save (fire-and-forget — NO await)
+  clearGame("classic");
+
+  // close modal first
+  setWinVisible(false);
+
+  // 🚀 navigate AFTER modal unmount
+  requestAnimationFrame(() => {
+    router.replace("/variantHub");
+  });
+}}
+
+
+  onRestart={(level) => {
+  // 🔒 This restart starts a BRAND NEW session
+  skipNextResumeRef.current = true;
+  skipNextSaveRef.current = true;
+
+  // 🚫 absolutely forbid resume from previous win
+  AsyncStorage.removeItem("gameFinished");
+  clearGame("classic");
+
+  setResumeData(null);
+  setResumeVisible(false);
+
+  setWinVisible(false);
+  handleRestart(level);
+}}
+
+
+    difficulty={difficulty}
+    isDaily={isDaily}
+  />
+)}
+
+
 
     {/* ✅ Ladder Rank-Up Popup */}
     <RankUpPopup />

@@ -31,6 +31,19 @@ function dailyKey(key: string) {
   return `${key}:${uid}`;
 }
 
+const devResetDaily = async () => {
+  await AsyncStorage.multiRemove([
+    dailyKey("dailyPlayed"),
+    dailyKey("lastDailyDate"),
+    dailyKey("dailyStreak"),
+    dailyKey("weeklyGames"),
+  ]);
+
+  console.log("🧪 DEV: Daily reset");
+};
+
+
+
 const { width } = Dimensions.get("window");
 const BTN_WIDTH = Math.min(280, width * 0.82);
 
@@ -245,6 +258,31 @@ useEffect(() => {
         >
           Sweirki Sudoku 🧩
         </Animated.Text>
+        {__DEV__ && (
+  <TouchableOpacity
+    onPress={async () => {
+      await devResetDaily();
+    }}
+    style={{
+      marginTop: 10,
+      paddingVertical: 6,
+      paddingHorizontal: 14,
+      borderRadius: 12,
+      backgroundColor: "#E74C3C",
+    }}
+  >
+    <Text
+      style={{
+        color: "#fff",
+        fontWeight: "800",
+        fontSize: 12,
+      }}
+    >
+      DEV: Reset Daily
+    </Text>
+  </TouchableOpacity>
+)}
+
  <View style={{ alignItems: "center", marginBottom: 14 }}>
   <Text
     style={[
@@ -575,7 +613,7 @@ const styles = StyleSheet.create({
   primaryButtonText: {
     color: "#1d479bff",
     fontWeight: "900",
-    fontSize: 20,
+    fontSize: 15,
     textAlign: "center",
   },
 statusContainer: {

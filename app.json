@@ -13,7 +13,12 @@
       "**/*"
     ],
     "ios": {
-      "supportsTablet": true
+      "supportsTablet": true,
+      "bundleIdentifier": "com.sweirki.sudoku",
+      "buildNumber": "1",
+      "infoPlist": {
+        "ITSAppUsesNonExemptEncryption": false
+      }
     },
     "android": {
       "adaptiveIcon": {
@@ -26,6 +31,7 @@
     "plugins": [
       "expo-audio",
       "expo-font"
-    ]
+    ],
+    "owner": "elecacademy"
   }
 }

@@ -5,6 +5,7 @@ import { useEffect, useState, useRef } from "react";
 import { View, ActivityIndicator, Platform } from "react-native";
 import * as Font from "expo-font";
 import * as SplashScreen from "expo-splash-screen";
+
 import * as Linking from "expo-linking";
 import { onAuthStateChanged } from "firebase/auth";
 import Purchases from "react-native-purchases";
@@ -16,6 +17,8 @@ import {
 import { auth } from "../firebase";
 import { handleReferral } from "../utils/inviteUtils";
 import { safeFirestoreCall } from "../src/utils/firestoreSafe";
+import { resetSeasonXPIfNeeded } from "./lib/ladderBridge";
+
 import RankUpPopup from "./components/RankUpPopup";
 SplashScreen.preventAutoHideAsync();
 
@@ -64,6 +67,31 @@ useEffect(() => {
 
   return unsubscribe;
 }, []);
+
+/* ================= SEASON FINALIZATION (STEP 5B) ================= */
+useEffect(() => {
+  if (!user) return;
+
+  const finalizeSeason = async () => {
+    try {
+      // 1️⃣ Reset season XP if rollover happened
+      await resetSeasonXPIfNeeded();
+
+      // 2️⃣ Show season summary once
+      const last = await AsyncStorage.getItem("lastSeasonEnded");
+      if (last) {
+        // TODO: replace with real Season Summary UI later
+        console.log("🏁 Season ended:", last);
+
+        // for now just clear the flag
+        await AsyncStorage.removeItem("lastSeasonEnded");
+      }
+    } catch {}
+  };
+
+  finalizeSeason();
+}, [user]);
+
 
 /* ================= SESSION TRACKING (PHASE 8B) ================= */
 useEffect(() => {
@@ -228,7 +256,14 @@ if (loading || !fontsReady) {
   /* ================= LOGGED OUT STACK ================= */
   if (!user) {
     return (
-      <Stack screenOptions={{ headerShown: false }}>
+      <Stack
+  screenOptions={{
+    headerShown: Platform.OS === "ios",
+    headerTitle: "",
+    gestureEnabled: true,
+  }}
+>
+
         <Stack.Screen name="login" />
         <Stack.Screen name="signup" />
       </Stack>
@@ -240,7 +275,14 @@ if (loading || !fontsReady) {
     <View style={{ flex: 1 }}>
       <RankUpPopup />
 
-      <Stack screenOptions={{ headerShown: false }}>
+    <Stack
+  screenOptions={{
+    headerShown: Platform.OS === "ios",
+    headerTitle: "",
+    gestureEnabled: true,
+  }}
+>
+
         <Stack.Screen name="splash" />
         <Stack.Screen name="sudokuIntro" />
         <Stack.Screen name="sudoku" />

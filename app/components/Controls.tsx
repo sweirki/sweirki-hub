@@ -107,15 +107,27 @@ export default function Controls({
         <Btn label="Delete" onPress={onDelete} disabled={locked} />
       </View>
 
-    <View style={styles.row}>
+  <View style={styles.row}>
   <Btn label="Restart" onPress={onRestart} />
+
   <Btn
     label={pencilMode ? "Pencil ON" : "Pencil OFF"}
     onPress={onTogglePencil}
     highlight={!locked && pencilMode}
     disabled={locked}
   />
+
+  {__DEV__ && (
+    <Btn
+      label="Solve"
+      onPress={onSolve}
+      highlight
+      disabled={locked}
+    />
+  )}
 </View>
+
+
 
     </View>
   );
@@ -143,7 +155,7 @@ const styles = StyleSheet.create({
     alignItems: "center",
   },
   btnText: {
-    fontSize: 14,
+    fontSize: 12,
     fontWeight: "700",
   },
 });

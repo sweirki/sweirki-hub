@@ -31,6 +31,16 @@ import RequireAuth from "./RequireAuth";
 import { theme } from "../theme";
 import { useRouter } from "expo-router";
 import { router } from "expo-router";
+
+const SEASON_LENGTH_DAYS = 28;
+const SEASON_START = new Date("2025-01-01").getTime();
+
+function getCurrentSeasonId() {
+  const diffDays = Math.floor((Date.now() - SEASON_START) / 86400000);
+  return Math.floor(diffDays / SEASON_LENGTH_DAYS);
+}
+
+
 type Stats = {
   ladderXP: number;
   ladderRank: string;
@@ -98,17 +108,15 @@ const [seasonChange, setSeasonChange] = useState<{
       } catch {}
 
       // Season XP
-      let seasonXP = 0;
-      try {
-        const meta = await getDoc(doc(db, "seasonMeta", "current"));
-        const season = meta.exists() ? meta.data().season : null;
-        if (season) {
-          const seasonSnap = await getDoc(
-            doc(db, "seasonUsers", `${season}_${user.uid}`)
-          );
-          seasonXP = seasonSnap.exists() ? seasonSnap.data().xp ?? 0 : 0;
-        }
-      } catch {}
+let seasonXP = 0;
+try {
+  const seasonId = getCurrentSeasonId();
+  const seasonSnap = await getDoc(
+    doc(db, "seasonUsers", `${seasonId}_${user.uid}`)
+  );
+  seasonXP = seasonSnap.exists() ? seasonSnap.data().xp ?? 0 : 0;
+} catch {}
+
 
      const newSeasonRank = getSeasonRank(seasonXP);
 
@@ -140,12 +148,6 @@ try {
   await AsyncStorage.setItem("lastSeasonRank", newSeasonRank);
 } catch {}
 
-{seasonChange && (
-  <Text style={styles.seasonChange}>
-    {seasonChange.direction === "up" ? "⬆️ Promoted to " : "⬇️ Demoted to "}
-    {seasonChange.to}
-  </Text>
-)}
 
     };
 
@@ -251,8 +253,16 @@ const confirmLogout = async () => {
     <View style={[styles.avatar, styles.avatarPlaceholder]}>
       <Text style={styles.avatarText}>+</Text>
     </View>
+    
   )}
 </TouchableOpacity>
+{/* SEASON CHANGE NOTICE */}
+{seasonChange && (
+  <Text style={styles.seasonChange}>
+    {seasonChange.direction === "up" ? "⬆️ Promoted to " : "⬇️ Demoted to "}
+    {seasonChange.to}
+  </Text>
+)}
 
 <Text style={styles.avatarHint}>Tap to add photo</Text>
 
@@ -266,12 +276,20 @@ const confirmLogout = async () => {
           />
 
 {/* SEASON LEAGUE BADGE */}
-<View style={styles.leagueBadge}>
-  <Text style={styles.leagueIcon}>
-    {TIER_ICONS[stats.seasonRank] ?? "🥉"}
-  </Text>
-  <Text style={styles.leagueValue}>{stats.seasonRank}</Text>
-</View>
+{isPremium ? (
+  <View style={styles.leagueBadge}>
+    <Text style={styles.leagueIcon}>
+      {TIER_ICONS[stats.seasonRank] ?? "🥉"}
+    </Text>
+    <Text style={styles.leagueValue}>{stats.seasonRank}</Text>
+  </View>
+) : (
+  <View style={[styles.leagueBadge, { opacity: 0.5 }]}>
+    <Text style={styles.leagueIcon}>🔒</Text>
+    <Text style={styles.leagueValue}>Premium Rank</Text>
+  </View>
+)}
+
 
 
 
@@ -287,15 +305,58 @@ const confirmLogout = async () => {
             </TouchableOpacity>
           </View>
         </View>
+{/* SEASON PROGRESS */}
+<View style={styles.seasonCard}>
+  <Text style={styles.seasonTitle}>Season Progress</Text>
 
-        {/* CORE STATS */}
-        <View style={styles.statsCard}>
-          <Text style={styles.cardTitle}>Core Stats</Text>
-          <Text style={styles.statLine}>🏆 Ladder: {stats.ladderRank}</Text>
-          <Text style={styles.statLine}>⭐ Ladder XP: {stats.ladderXP}</Text>
-          <Text style={styles.statLine}>📅 Season: {stats.seasonRank}</Text>
-          <Text style={styles.statLine}>📈 Season XP: {stats.seasonXP}</Text>
-        </View>
+  <View style={styles.progressBar}>
+    <View
+      style={[
+        styles.progressFill,
+        {
+         width: `${Math.max(4, Math.round((stats.seasonXP / 1000) * 100))}%`,
+
+        },
+      ]}
+    />
+  </View>
+
+<Text style={styles.seasonXpText}>
+  New season — earn XP by playing games
+</Text>
+
+
+
+
+  <Text style={styles.seasonReward}>
+  Next reward: Unlock next tier
+</Text>
+
+</View>
+
+
+
+{/* CORE STATS */}
+<View style={styles.statsCard}>
+  <Text style={styles.cardTitle}>Core Stats</Text>
+
+  {isPremium ? (
+    <>
+      <Text style={styles.statLine}>🏆 Ladder: {stats.ladderRank}</Text>
+      <Text style={styles.statLine}>⭐ Ladder XP: {stats.ladderXP}</Text>
+      <Text style={styles.statLine}>📅 Season: {stats.seasonRank}</Text>
+      <Text style={styles.statLine}>📈 Season XP: {stats.seasonXP}</Text>
+    </>
+  ) : (
+    <>
+      <Text style={styles.statLine}>🏆 Ladder: Locked</Text>
+      <Text style={styles.statLine}>⭐ Ladder XP: Locked</Text>
+      <Text style={styles.statLine}>📅 Season: Locked</Text>
+      <Text style={styles.statLine}>📈 Season XP: Locked</Text>
+    </>
+  )}
+</View>
+
 
         {/* ACHIEVEMENTS */}
         <View style={styles.statsCard}>
@@ -326,6 +387,25 @@ const confirmLogout = async () => {
 >
   <Text style={styles.progressBtnText}>View Progress</Text>
 </TouchableOpacity>
+
+
+<TouchableOpacity
+  style={styles.progressBtn}
+  activeOpacity={0.85}
+  onPress={() => router.push("/history")}
+>
+  <Text style={styles.progressBtnText}>Game History</Text>
+</TouchableOpacity>
+
+<TouchableOpacity
+  style={styles.progressBtn}
+  activeOpacity={0.85}
+  onPress={() => router.push("/stats")}
+>
+  <Text style={styles.progressBtnText}>Stats</Text>
+</TouchableOpacity>
+
+
 
         {/* ACCOUNT */}
 <View style={styles.accountCard}>
@@ -466,7 +546,7 @@ const styles = StyleSheet.create({
   scroll: { alignItems: "center", paddingVertical: 40 },
 title: {
   fontFamily: "BalooBold",
-  fontSize: 28,
+  fontSize: 25,
   color: "#FBE7A1",
   marginBottom: 6,
   textAlign: "center",
@@ -474,7 +554,7 @@ title: {
 
 subtitle: {
   fontFamily: "BalooRegular",
-  fontSize: 13,
+  fontSize: 10,
   color: "rgba(255,255,255,0.7)",
   marginBottom: 24,
   textAlign: "center",
@@ -507,7 +587,7 @@ identityCard: {
 
 progressBtnText: {
   color: "#FBE7A1",
-  fontSize: 15,
+  fontSize: 13,
   fontWeight: "800",
 },
 
@@ -528,13 +608,13 @@ progressBtnText: {
   avatarText: { fontSize: 36, color: "#D8B24A" },
 avatarHint: {
   color: "rgba(255,255,255,0.6)",
-  fontSize: 12,
+  fontSize: 11,
   marginBottom: 6,
 },
 
   username: {
     color: "#fff",
-    fontSize: 18,
+    fontSize: 16,
     fontWeight: "700",
     borderBottomWidth: 1,
     borderBottomColor: "rgba(255,255,255,0.3)",
@@ -562,7 +642,7 @@ avatarHint: {
   },
 
   cardTitle: {
-    fontSize: 16,
+    fontSize: 14,
     fontWeight: "800",
     color: "#FBE7A1",
     marginBottom: 10,
@@ -570,7 +650,7 @@ avatarHint: {
 
   statLine: {
     color: "#fff",
-    fontSize: 14,
+    fontSize: 13,
     marginBottom: 6,
   },
 
@@ -587,7 +667,7 @@ avatarHint: {
   },
 accountInfo: {
   color: "rgba(255,255,255,0.75)",
-  fontSize: 13,
+  fontSize: 12,
   marginBottom: 12,
 },
 
@@ -605,7 +685,7 @@ upgradeBtn: {
 
 upgradeText: {
   color: "#10223D",
-  fontSize: 15,
+  fontSize: 13,
   fontWeight: "900",
 },
 
@@ -617,7 +697,7 @@ restoreBtn: {
 
 restoreText: {
   color: "#FBE7A1",
-  fontSize: 13,
+  fontSize: 11,
   fontWeight: "700",
 },
 
@@ -643,7 +723,7 @@ logoutBtn: {
 
 logoutText: {
   color: "#ff6b6b",
-  fontSize: 15,
+  fontSize: 13,
   fontWeight: "700",
 },
 
@@ -664,7 +744,7 @@ modalCard: {
 },
 
 modalTitle: {
-  fontSize: 18,
+  fontSize: 16,
   fontWeight: "800",
   color: "#FBE7A1",
   textAlign: "center",
@@ -672,7 +752,7 @@ modalTitle: {
 },
 
 modalText: {
-  fontSize: 14,
+  fontSize: 13,
   color: "rgba(255,255,255,0.9)",
   textAlign: "center",
   marginBottom: 20,
@@ -732,24 +812,53 @@ leagueBadge: {
 
 seasonChange: {
   marginBottom: 14,
-  fontSize: 13,
+  fontSize: 12,
   fontWeight: "700",
   color: "#F6C76B",
   opacity: 0.9,
 },
 
+seasonTitle: {
+  fontSize: 16,
+  fontWeight: "800",
+  marginBottom: 8,
+   color: "#FBE7A1",
+},
+
+seasonXpText: {
+  fontSize: 13,
+  marginBottom: 6,
+  fontWeight: "800",
+  color: "rgba(255,255,255,0.8)",
+},
+
+seasonReward: {
+  fontSize: 13,
+  fontWeight: "800",
+  color: "rgba(255,255,255,0.9)",
+},
+
 
 leagueIcon: {
-  fontSize: 28,        // 👈 badge size
+  fontSize: 26,        // 👈 badge size
   marginBottom: 4,
 },
 
 leagueValue: {
-  fontSize: 16,
+  fontSize: 14,
   fontWeight: "800",
   color: "#FBE7A1",
   textAlign: "center",
 },
 
+seasonCard: {
+  width: "85%",              // 👈 IMPORTANT (you missed this)
+  backgroundColor: "rgba(0,0,40,0.6)",
+  borderRadius: 18,
+  padding: 20,
+  marginBottom: 24,
+  borderWidth: 1,
+  borderColor: "rgba(255,255,255,0.25)",
+},
 
 });

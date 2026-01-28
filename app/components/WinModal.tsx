@@ -189,16 +189,17 @@ useEffect(() => {
 
 
   /* ───────────── HANDLERS ───────────── */
-  const handlePrimary = () => {
-    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-    onClose();
+ const handlePrimary = () => {
+  Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
 
-    if (isDaily || isFirstWin) {
-      setTimeout(() => router.replace("/sudokuIntro"), 400);
-    } else {
-      setTimeout(() => onRestart(difficulty), 200);
-    }
-  };
+  if (isDaily || isFirstWin) {
+    onClose();
+    setTimeout(() => router.replace("/sudokuIntro"), 400);
+  } else {
+    // ✅ Restart ONLY — do NOT call onClose
+    onRestart(difficulty);
+  }
+};
 
   const handleSecondary = () => {
     onClose();
