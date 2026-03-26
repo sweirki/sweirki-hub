@@ -44,7 +44,7 @@ export default ({ config }) => ({
         ios: {
           supportsTablet: true,
           bundleIdentifier: "com.sweirki.sudoku",
-          buildNumber: "1",
+          buildNumber: "2",
           infoPlist: {
             ITSAppUsesNonExemptEncryption: false,
           },
@@ -85,7 +85,7 @@ export default ({ config }) => ({
         },
 
         // ─────────────────────────────
-        // Plugins (FINAL — NO RCT-Folly)
+        // Plugins
         // ─────────────────────────────
         plugins: [
           "expo-asset",
@@ -102,6 +102,15 @@ export default ({ config }) => ({
               iosAppId:
                 "ca-app-pub-9603430285076746~1458002511",
               delayAppMeasurementInit: true,
+            },
+          ],
+
+          [
+            "expo-build-properties",
+            {
+              ios: {
+                useFrameworks: "static",
+              },
             },
           ],
 

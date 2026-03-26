@@ -3,4 +3,5 @@ export type GameResult = {
   win: boolean;
   time: number;     // seconds
   errors: number;
+  hintsUsed?: number; // ✅ add this (optional)
 };

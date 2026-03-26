@@ -156,7 +156,7 @@ if (!overlayColor) {
 
   // Light, clean shading for pro sudoku look
   if (isBoxEven) {
-    overlayColor = "rgba(200, 200, 200, 0.34)";
+    overlayColor = "rgba(200, 200, 200, 0.40)";
   }
 }
 

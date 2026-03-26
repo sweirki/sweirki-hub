@@ -1,31 +1,42 @@
-import AsyncStorage from "@react-native-async-storage/async-storage";
-import { auth } from "../../firebase";
+import { db, auth } from "../../firebase";
+import {
+  collection,
+  addDoc,
+  serverTimestamp,
+} from "firebase/firestore";
 
 export type GameHistoryEntry = {
   mode: string;
   win: boolean;
   time: number;
   errors: number;
-  date: string;
+  hintsUsed?: number;
 };
 
-function historyKey() {
-  const uid = auth.currentUser?.uid || "guest";
-  return `gameHistory:${uid}`;
-}
-
-export async function saveGameHistory(entry: GameHistoryEntry) {
-     console.log("📝 saving history entry", entry);
+export async function saveGameHistory(
+  entry: GameHistoryEntry
+) {
   try {
-    const key = historyKey();
-    const raw = await AsyncStorage.getItem(key);
-    const history = raw ? JSON.parse(raw) : [];
+    const user = auth.currentUser;
+    if (!user) {
+      console.warn("⚠️ saveGameHistory: no authenticated user");
+      return;
+    }
 
-    history.unshift(entry);
-    const trimmed = history.slice(0, 50);
+    const gamesRef = collection(
+      db,
+      "users",
+      user.uid,
+      "games"
+    );
 
-    await AsyncStorage.setItem(key, JSON.stringify(trimmed));
-  } catch (e) {
-    console.warn("History save failed", e);
+    await addDoc(gamesRef, {
+      ...entry,
+      createdAt: serverTimestamp(),
+    });
+
+    console.log("📝 History saved to Firestore");
+  } catch (err) {
+    console.warn("⚠️ History save failed:", err);
   }
 }

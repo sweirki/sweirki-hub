@@ -14,6 +14,7 @@ import {
 import { useFocusEffect } from "expo-router";
 import * as Haptics from "expo-haptics";
 import { Easing } from "react-native";
+import { getXpMultiplier } from "../src/analytics/playerAnalytics";
 import { LinearGradient } from "expo-linear-gradient";
 import { getColors } from "../theme";
 import { useRouter } from "expo-router";
@@ -31,16 +32,6 @@ function dailyKey(key: string) {
   return `${key}:${uid}`;
 }
 
-const devResetDaily = async () => {
-  await AsyncStorage.multiRemove([
-    dailyKey("dailyPlayed"),
-    dailyKey("lastDailyDate"),
-    dailyKey("dailyStreak"),
-    dailyKey("weeklyGames"),
-  ]);
-
-  console.log("🧪 DEV: Daily reset");
-};
 
 
 
@@ -69,7 +60,7 @@ const go = (path: string) => router.push(path as any);
   const [dailyStatus, setDailyStatus] = useState<string | null>(null);
   const [weeklyStatus, setWeeklyStatus] = useState<string | null>(null); // <— ADD HERE
   const [progressHint, setProgressHint] = useState<string | null>(null);
-
+const [activityStreakLine, setActivityStreakLine] = useState<string | null>(null);
 const handleContinue = async () => {
   const today = new Date().toISOString().split("T")[0];
  const played = await AsyncStorage.getItem(dailyKey("dailyPlayed"));
@@ -155,6 +146,23 @@ useFocusEffect(
         } catch {
           if (active) setDailyStatus(null);
         }
+// ACTIVITY STREAK + MULTIPLIER
+try {
+  const { mult, streak } = await getXpMultiplier();
+
+  if (!active) return;
+
+  if (streak > 0) {
+    activityStreakLine = `🔥 ${streak}-day Activity Streak · x${mult.toFixed(2)} XP`;
+    setActivityStreakLine(activityStreakLine);
+  } else {
+    setActivityStreakLine("Start a streak to earn XP boosts");
+  }
+} catch {
+  if (active) setActivityStreakLine(null);
+}
+
+
 
         // WEEKLY STATUS
         try {
@@ -258,30 +266,7 @@ useEffect(() => {
         >
           Sweirki Sudoku 🧩
         </Animated.Text>
-        {__DEV__ && (
-  <TouchableOpacity
-    onPress={async () => {
-      await devResetDaily();
-    }}
-    style={{
-      marginTop: 10,
-      paddingVertical: 6,
-      paddingHorizontal: 14,
-      borderRadius: 12,
-      backgroundColor: "#E74C3C",
-    }}
-  >
-    <Text
-      style={{
-        color: "#fff",
-        fontWeight: "800",
-        fontSize: 12,
-      }}
-    >
-      DEV: Reset Daily
-    </Text>
-  </TouchableOpacity>
-)}
+      
 
  <View style={{ alignItems: "center", marginBottom: 14 }}>
   <Text
@@ -332,7 +317,11 @@ useEffect(() => {
       {progressHint}
     </Text>
 )}
-
+{activityStreakLine ? (
+  <Text style={[styles.subtitle, { marginTop: 4, opacity: 0.95 }]}>
+    {activityStreakLine}
+  </Text>
+) : null}
 </View>
 
 

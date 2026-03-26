@@ -15,7 +15,9 @@ import { useRouter } from "expo-router";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import * as Haptics from "expo-haptics";
 import { Audio } from "expo-av";
-
+import LottieView from "lottie-react-native";
+import { getAnalytics } from "../../src/analytics/playerAnalytics";
+import { auth } from "../../firebase";
 
 interface WinModalProps {
   visible: boolean;
@@ -35,7 +37,8 @@ export default function WinModal({
   isDaily = false,
 }: WinModalProps) {
   const router = useRouter();
-
+const [recordBadge, setRecordBadge] = useState<string | null>(null);
+const confettiRef = useRef<LottieView>(null);
   /* ───────────── STATE ───────────── */
   const [showMenu, setShowMenu] = useState(false);
   const [showPreCelebrate, setShowPreCelebrate] = useState(false);
@@ -52,6 +55,40 @@ const victorySound = useRef<Audio.Sound | null>(null);
   /* ───────────── FIRST WIN CHECK ───────────── */
   useEffect(() => {
     if (!visible) return;
+
+setRecordBadge(null);
+
+requestAnimationFrame(() => {
+  confettiRef.current?.reset();
+  confettiRef.current?.play();
+});
+
+(async () => {
+  try {
+    const uid = auth.currentUser?.uid;
+    if (!uid) return;
+
+    const a = await getAnalytics();
+    // show a tiny “record” badge when streak best equals current and current > 0
+  const prevActivityBestRaw = await AsyncStorage.getItem("best_activity_streak_seen");
+const prevActivityBest = prevActivityBestRaw ? Number(prevActivityBestRaw) : 0;
+
+if (a.streaks.activityBest > prevActivityBest) {
+  setRecordBadge("🏆 New Activity Record!");
+  await AsyncStorage.setItem("best_activity_streak_seen", String(a.streaks.activityBest));
+}
+
+if (isDaily) {
+  const prevDailyBestRaw = await AsyncStorage.getItem("best_daily_streak_seen");
+  const prevDailyBest = prevDailyBestRaw ? Number(prevDailyBestRaw) : 0;
+
+  if (a.streaks.dailyBest > prevDailyBest) {
+    setRecordBadge("🏆 New Daily Record!");
+    await AsyncStorage.setItem("best_daily_streak_seen", String(a.streaks.dailyBest));
+  }
+}
+  } catch {}
+})();
 
     let cancelled = false;
     (async () => {
@@ -221,6 +258,15 @@ useEffect(() => {
   /* ───────────── RENDER ───────────── */
   return (
     <Modal visible={visible} transparent animationType="fade">
+
+<LottieView
+  ref={confettiRef}
+  source={require("../../assets/animations/confetti.json")}
+  autoPlay
+  loop={false}
+  style={[StyleSheet.absoluteFill, { zIndex: 0 }]}
+/>
+      
       {/* PRE-CELEBRATION */}
       {showPreCelebrate && (
         <View style={styles.preOverlay}>
@@ -323,6 +369,32 @@ useEffect(() => {
                   ? "Your journey has begun"
                   : "Another step forward"}
               </Text>
+
+
+{/* 🔥 NEW RECORD BADGE GOES HERE */}
+{recordBadge ? (
+  <View
+    style={{
+      marginBottom: 18,
+      paddingVertical: 6,
+      paddingHorizontal: 14,
+      borderRadius: 18,
+      backgroundColor: "rgba(255,215,0,0.12)",
+      borderWidth: 1,
+      borderColor: "rgba(255,215,0,0.25)",
+    }}
+  >
+    <Text
+      style={{
+        color: "#FFD700",
+        fontWeight: "800",
+        fontSize: 13,
+      }}
+    >
+      {recordBadge}
+    </Text>
+  </View>
+) : null}
 
               <TouchableOpacity style={styles.primaryBtn} onPress={handlePrimary}>
                 <LinearGradient

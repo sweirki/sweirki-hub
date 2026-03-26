@@ -79,9 +79,10 @@ const [purchaseError, setPurchaseError] = useState<string | null>(null);
           onPress={buyLifetime}
           activeOpacity={0.85}
         >
-          <Text style={styles.primaryText}>
-            Unlock Premium — $6.99 (Lifetime)
-          </Text>
+        <Text style={styles.primaryText}>
+  Unlock Premium — {lifetimePackage.product.priceString}
+</Text>
+
         </TouchableOpacity>
       )}
 

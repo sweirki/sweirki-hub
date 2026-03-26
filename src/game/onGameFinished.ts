@@ -1,13 +1,16 @@
-import { saveGameHistory } from "../history/saveGameHistory";
 import { GameResult } from "./gameResult";
+import { recordGameResult } from "../analytics/playerAnalytics";
+import { saveGameHistoryCloud } from "../history/saveGameHistoryCloud";
+import { auth } from "../../firebase";
 
-
-
-  export async function onGameFinished(result: GameResult) {
+export async function onGameFinished(result: GameResult) {
   console.log("🔥 onGameFinished called", result);
 
-  // 1️⃣ Save to History (player memory)
-  await saveGameHistory({
+  const uid = auth.currentUser?.uid;
+  if (!uid) return;
+
+  // 1️⃣ Save to Cloud History
+  await saveGameHistoryCloud({
     mode: result.mode,
     win: result.win,
     time: result.time,
@@ -15,9 +18,13 @@ import { GameResult } from "./gameResult";
     date: new Date().toISOString(),
   });
 
-  // 2️⃣ Future-proof:
-  // achievements
-  // stats
-  // cloud sync
-  // notifications
+  // 2️⃣ Record analytics + stats (authoritative)
+  await recordGameResult({
+    username: uid,
+    mode: result.mode,
+    win: result.win,
+    timeSec: result.time,
+    errors: result.errors,
+    hintsUsed: result.hintsUsed ?? 0,
+  });
 }

@@ -58,13 +58,7 @@ export default function DailyChallenge() {
  const unlockAchievement = useAchievementsStore((s) => s.unlock);
 const { isPremium } = useRevenueCat();
 
-const premiumAtStartRef = useRef<boolean | null>(null);
 
-useEffect(() => {
-  if (premiumAtStartRef.current === null && isPremium !== undefined) {
-    premiumAtStartRef.current = isPremium;
-  }
-}, [isPremium]);
 
 const clearDailyDev = async () => {
   try {
@@ -175,136 +169,122 @@ if (played === today || lastPlayed === today) {
      ATOMIC DAILY COMMIT
   ========================= */
 
-  const commitDailyWin = async (result: any) => {
-    console.log("🔥🔥 DAILY COMMIT ENTERED", {
-  uid: auth.currentUser?.uid,
-  premiumAtStart: premiumAtStartRef.current,
-  isPremium,
-});
+const commitDailyWin = async (result: any) => {
+  const today = getDailyIdUTC();
 
-    const today = getDailyIdUTC();
-if (premiumAtStartRef.current === false) {
-  await AsyncStorage.setItem(dailyKey("dailyPlayed"), getDailyIdUTC());
-  setSaving(false);
-  return;
-}
+  // 🔒 Premium-only leaderboard model
+  if (!isPremium) {
+    await AsyncStorage.setItem(dailyKey("dailyPlayed"), today);
+    return;
+  }
 
+  if (commitInProgress.current) return;
+  commitInProgress.current = true;
 
-await addDoc(collection(db, "leaderboard"), {
-  period: "daily",
-  dailyId: today,
-  uid: auth.currentUser!.uid,
-  time: result.time,
-  errors: result.errors,
-  createdAt: serverTimestamp(),
-});
+  setSaving(true);
+  setSaveError(null);
 
-    if (commitInProgress.current) return;
-    commitInProgress.current = true;
-// 📊 Phase 8A — record Daily analytics (canonical)
+  try {
+    const user = auth.currentUser;
+    if (!user) throw new Error("No authenticated user");
 
-recordGameResult({
-  username: auth.currentUser?.uid,
-  mode: "daily",
-  win: true,
-  timeSec: result.time,
-  errors: result.errors,
-  hintsUsed: result.hintsUsed ?? 0,
-});
+    const uid = user.uid;
 
-    setSaving(true);
-    setSaveError(null);
-const xp = calculateXpForLadder({
-  mode: "daily",
-  difficulty: result.difficulty,
-  time: result.time,
-  errors: result.errors,
-});
+    const username =
+      (await AsyncStorage.getItem("username")) ||
+      user.displayName ||
+      user.email ||
+      "Guest";
 
-    try {
-      const today = getDailyIdUTC();
+    /* =========================
+       1️⃣ Award Ladder XP
+    ========================= */
 
-      /* ---------- DAILY LEADERBOARD ---------- */
-      const dailyRef = doc(db, "dailyLeaderboard", today);
-      const dailySnap = await getDoc(dailyRef);
+    const xp = calculateXpForLadder({
+      mode: "daily",
+      difficulty: result.difficulty,
+      time: result.time,
+      errors: result.errors,
+    });
 
-      const scores = dailySnap.exists()
-        ? dailySnap.data().scores || []
-        : [];
+    await awardLadderXP(xp);
+    await refreshLadderData(username);
 
-      const userKey = result.user || "Guest";
-      const alreadyIn = scores.some((s: any) => s?.user === userKey);
-console.log("DAILY alreadyIn =", alreadyIn);
+    /* =========================
+       2️⃣ Daily Leaderboard
+    ========================= */
 
-      if (!alreadyIn) {
-        scores.push(result);
-        await setDoc(dailyRef, { scores }, { merge: true });
+    const dailyRef = doc(db, "dailyLeaderboard", today);
+    const dailySnap = await getDoc(dailyRef);
 
+    const scores = dailySnap.exists()
+      ? dailySnap.data().scores || []
+      : [];
 
+    const alreadyIn = scores.some((s: any) => s?.uid === uid);
 
-        // ✅ compute daily placement (fastest time rank)
-const sorted = [...scores].sort((a, b) => (a.time ?? 999999) - (b.time ?? 999999));
-const dailyIndex = sorted.findIndex((s: any) => s?.user === userKey);
-const dailyRank = dailyIndex >= 0 ? dailyIndex + 1 : null;
+    if (!alreadyIn) {
+      scores.push({
+        uid,
+        username,
+        time: result.time,
+        errors: result.errors,
+        difficulty: result.difficulty,
+      });
 
-if (dailyRank && dailyRank <= 100) {
-  const raw = await AsyncStorage.getItem("dailyTop100Count");
-  const next = (raw ? parseInt(raw, 10) : 0) + 1;
-  await AsyncStorage.setItem("dailyTop100Count", String(next));
-
-  setLadderText(next === 1 ? "🏅 Top 100 — first achievement" : `🏅 Top 100 achieved — ${next} times`);
-} else {
-  setLadderText(null);
-}
-
-      }
-
-    /* ---------- STREAK + LOCAL LOCK (LAST) ---------- */
-      const lastPlayed = await AsyncStorage.getItem(dailyKey("lastDailyDate"));
-      let streak = 1;
-
-      if (lastPlayed) {
-        const diff =
-          (new Date(today).getTime() -
-            new Date(lastPlayed).getTime()) /
-          (1000 * 3600 * 24);
-
-        if (diff === 1) {
-         const prev = await AsyncStorage.getItem(dailyKey("dailyStreak"));
-          streak = prev ? parseInt(prev, 10) + 1 : 1;
-        }
-      }
-
-    // 🔒 Lock Daily ONLY after ladder + leaderboard success
-
-await AsyncStorage.setItem(dailyKey("lastDailyDate"), today);
-await AsyncStorage.setItem(dailyKey("dailyStreak"), String(streak));
-setDailyStreak(streak);
-
-await AsyncStorage.setItem(dailyKey("dailyPlayed"), today);
-
-// 📈 Track weekly games locally (ladder UI helper)
-const prevWeekly = await AsyncStorage.getItem(dailyKey("weeklyGames"));
-const weeklyCount = prevWeekly ? parseInt(prevWeekly, 10) + 1 : 1;
-await AsyncStorage.setItem(dailyKey("weeklyGames"), String(weeklyCount));
-
-/* ---------- ACHIEVEMENTS ---------- */
-unlockAchievement("first_win");
-unlockAchievement("points_collector");
-
-if (streak >= 3) {
-  unlockAchievement("streak_keeper");
-}
-
-setSaving(false);
-
-    } catch (e) {
-      console.error("❌ Daily commit failed:", e);
-      setSaveError("Failed to save Daily progress. Please try again.");
-      setSaving(false);
-      commitInProgress.current = false;
+      await setDoc(dailyRef, { scores }, { merge: true });
     }
-  };
+
+    /* =========================
+       3️⃣ Daily Lock + Streak
+    ========================= */
+
+    const lastPlayed = await AsyncStorage.getItem(
+      dailyKey("lastDailyDate")
+    );
+
+    let streak = 1;
+
+    if (lastPlayed) {
+      const diff =
+        (new Date(today).getTime() -
+          new Date(lastPlayed).getTime()) /
+        (1000 * 3600 * 24);
+
+      if (diff === 1) {
+        const prev = await AsyncStorage.getItem(
+          dailyKey("dailyStreak")
+        );
+        streak = prev ? parseInt(prev, 10) + 1 : 1;
+      }
+    }
+
+    await AsyncStorage.setItem(dailyKey("lastDailyDate"), today);
+    await AsyncStorage.setItem(dailyKey("dailyStreak"), String(streak));
+    await AsyncStorage.setItem(dailyKey("dailyPlayed"), today);
+
+    setDailyStreak(streak);
+
+    /* =========================
+       4️⃣ Achievements
+    ========================= */
+
+    unlockAchievement("first_win");
+    unlockAchievement("points_collector");
+
+    if (streak >= 3) {
+      unlockAchievement("streak_keeper");
+    }
+
+    setSaving(false);
+  } catch (e) {
+    console.error("❌ Daily commit failed:", e);
+    setSaveError("Failed to save Daily progress.");
+    setSaving(false);
+    commitInProgress.current = false;
+  }
+};
+
 
   const handleDailyLose = async () => {
   const today = getDailyIdUTC();

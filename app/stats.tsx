@@ -5,67 +5,51 @@ import {
   StyleSheet,
   ActivityIndicator,
   ImageBackground,
+  ScrollView,
 } from "react-native";
-import AsyncStorage from "@react-native-async-storage/async-storage";
+
 import { auth } from "../firebase";
 import { LinearGradient } from "expo-linear-gradient";
-import { ScrollView } from "react-native";
 
+import {
+  getAnalytics,
+  getProgressSummary,
+  getModeProgress,
+} from "../src/analytics/playerAnalytics";
 
-type GameEntry = {
-  mode: string;
-  win: boolean;
-  time: number;
-  errors: number;
-  date: string;
-};
-
-function historyKey() {
-  const uid = auth.currentUser?.uid || "guest";
-  return `gameHistory:${uid}`;
-}
-
-function formatTime(sec: number) {
-  if (!isFinite(sec) || sec <= 0) return "-";
-  const m = Math.floor(sec / 60);
-  const s = sec % 60;
-  return `${m}:${s.toString().padStart(2, "0")}`;
-}
-
-function modeIcon(mode: string) {
-  switch (mode) {
-    case "classic":
-      return "🧩";
-    case "daily":
-      return "📅";
-    case "hyper":
-      return "⚡";
-    case "killer":
-      return "☠️";
-    case "x":
-      return "❌";
-    default:
-      return "🎮";
-  }
-}
+/* ================= SCREEN ================= */
 
 export default function StatsScreen() {
   const [loading, setLoading] = useState(true);
-  const [history, setHistory] = useState<GameEntry[]>([]);
+  const [summary, setSummary] = useState<any>(null);
+  const [classic, setClassic] = useState<any>(null);
+  const [daily, setDaily] = useState<any>(null);
+  const [hyper, setHyper] = useState<any>(null);
+  const [killer, setKiller] = useState<any>(null);
+  const [xMode, setXMode] = useState<any>(null);
 
   useEffect(() => {
-    const load = async () => {
+    const loadStats = async () => {
       try {
-        const raw = await AsyncStorage.getItem(historyKey());
-        const parsed = raw ? JSON.parse(raw) : [];
-        setHistory(parsed);
-      } catch {
-        setHistory([]);
+        const userId = auth.currentUser?.uid;
+        if (!userId) return;
+
+        const analytics = await getAnalytics(userId);
+
+        setSummary(getProgressSummary(analytics));
+        setClassic(getModeProgress(analytics, "classic"));
+        setDaily(getModeProgress(analytics, "daily"));
+        setHyper(getModeProgress(analytics, "hyper"));
+        setKiller(getModeProgress(analytics, "killer"));
+        setXMode(getModeProgress(analytics, "x"));
+      } catch (err) {
+        console.log("Stats load failed:", err);
       } finally {
         setLoading(false);
       }
     };
-    load();
+
+    loadStats();
   }, []);
 
   if (loading) {
@@ -76,7 +60,7 @@ export default function StatsScreen() {
     );
   }
 
-  if (history.length === 0) {
+  if (!summary) {
     return (
       <View style={styles.center}>
         <Text style={styles.emptyText}>
@@ -85,20 +69,6 @@ export default function StatsScreen() {
       </View>
     );
   }
-
-  const totalGames = history.length;
-  const wins = history.filter(h => h.win);
-  const losses = totalGames - wins.length;
-  const winRate = Math.round((wins.length / totalGames) * 100);
-
-  const avgTime =
-    wins.length > 0
-      ? Math.round(
-          wins.reduce((sum, g) => sum + g.time, 0) / wins.length
-        )
-      : 0;
-
-  const modes = ["classic", "daily", "hyper", "killer", "x"];
 
   return (
     <ImageBackground
@@ -111,10 +81,10 @@ export default function StatsScreen() {
         style={StyleSheet.absoluteFillObject}
       />
 
-     <ScrollView
-  contentContainerStyle={styles.container}
-  showsVerticalScrollIndicator={false}
->
+      <ScrollView
+        contentContainerStyle={styles.container}
+        showsVerticalScrollIndicator={false}
+      >
         <Text style={styles.title}>Stats</Text>
         <Text style={styles.subtitle}>
           Your performance across all games
@@ -124,59 +94,60 @@ export default function StatsScreen() {
         <View style={styles.card}>
           <Text style={styles.cardTitle}>Overall</Text>
 
-          <StatRow label="Games Played" value={totalGames} />
-          <StatRow label="Wins" value={wins.length} />
-          <StatRow label="Losses" value={losses} />
-          <StatRow label="Win Rate" value={`${winRate}%`} />
-          <StatRow
-            label="Average Time"
-            value={formatTime(avgTime)}
-          />
+          <StatRow label="Games Played" value={summary.totalGames} />
+          <StatRow label="Wins" value={summary.totalWins} />
+          <StatRow label="Losses" value={summary.totalLosses} />
+          <StatRow label="Win Rate" value={`${summary.winRate}%`} />
+          <StatRow label="Total Play Time" value={summary.totalTime} />
         </View>
 
         {/* BY MODE */}
         <View style={styles.card}>
           <Text style={styles.cardTitle}>By Mode</Text>
 
-          {modes.map(mode => {
-            const games = history.filter(h => h.mode === mode);
-            const winsForMode = games.filter(h => h.win);
-            const bestTime =
-              winsForMode.length > 0
-                ? Math.min(...winsForMode.map(g => g.time))
-                : null;
-
-            return (
-              <View key={mode} style={styles.modeRow}>
-                <Text style={styles.mode}>
-                  {modeIcon(mode)} {mode.toUpperCase()}
-                </Text>
-
-                <View style={styles.modeStats}>
-                  <Text style={styles.modeStat}>
-                    Games: {games.length}
-                  </Text>
-                  <Text style={styles.modeStat}>
-                    Best:{" "}
-                    {bestTime !== null
-                      ? formatTime(bestTime)
-                      : "-"}
-                  </Text>
-                </View>
-              </View>
-            );
-          })}
+          <ModeRow label="🧩 CLASSIC" data={classic} />
+          <ModeRow label="📅 DAILY" data={daily} />
+          <ModeRow label="⚡ HYPER" data={hyper} />
+          <ModeRow label="☠️ KILLER" data={killer} />
+          <ModeRow label="❌ X" data={xMode} />
         </View>
       </ScrollView>
     </ImageBackground>
   );
 }
 
+/* ================= COMPONENTS ================= */
+
 function StatRow({ label, value }: { label: string; value: any }) {
   return (
     <View style={styles.statRow}>
       <Text style={styles.statLabel}>{label}</Text>
       <Text style={styles.statValue}>{value}</Text>
+    </View>
+  );
+}
+
+function ModeRow({
+  label,
+  data,
+}: {
+  label: string;
+  data: any;
+}) {
+  if (!data) return null;
+
+  return (
+    <View style={styles.modeRow}>
+      <Text style={styles.mode}>{label}</Text>
+
+      <View style={styles.modeStats}>
+        <Text style={styles.modeStat}>
+          Games: {data.gamesPlayed}
+        </Text>
+        <Text style={styles.modeStat}>
+          Best: {data.bestTime}
+        </Text>
+      </View>
     </View>
   );
 }

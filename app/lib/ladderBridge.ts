@@ -2,24 +2,22 @@
 // @expo-router-ignore
 
 import AsyncStorage from "@react-native-async-storage/async-storage";
+import { getXpMultiplier } from "../../src/analytics/playerAnalytics";
 import { db, auth } from "../../firebase";
 import {
   doc,
   getDoc,
   setDoc,
-  updateDoc,
   increment,
 } from "firebase/firestore";
 
 import {
   getPlayerStats,
   type PlayerStats,
-  getLocalStats,
-  saveLocalStats,
 } from "./statsManager";
 
 /* ============================
-   SEASON CONFIG (PHASE 5)
+   SEASON CONFIG
 ============================ */
 
 const SEASON_LENGTH_DAYS = 28;
@@ -34,10 +32,6 @@ function getCurrentSeasonId(): number {
    LADDER DATA SYNC
 ============================ */
 
-/**
- * Sync latest ladder stats from Firestore into AsyncStorage
- * so the hub / legend / leaderboard can read them quickly.
- */
 export const refreshLadderData = async (username: string) => {
   try {
     const stats = await getPlayerStats(username);
@@ -54,13 +48,9 @@ export const refreshLadderData = async (username: string) => {
 };
 
 /* ============================
-   XP AWARD (PHASE 5 SAFE)
+   XP AWARD
 ============================ */
 
-/**
- * Award ladder XP to the current Firebase user.
- * Used by all Sudoku boards after a WIN.
- */
 export const awardLadderXP = async (xp: number) => {
   try {
     const user = auth.currentUser;
@@ -71,7 +61,6 @@ export const awardLadderXP = async (xp: number) => {
 
     const uid = user.uid;
 
-    // Use local username instead of Firebase email
     let username = await AsyncStorage.getItem("username");
     if (!username) {
       username = user.displayName || user.email || "Guest";
@@ -79,68 +68,46 @@ export const awardLadderXP = async (xp: number) => {
 
     const seasonId = getCurrentSeasonId();
 
-    // Read previous lifetime XP
-    const ref = doc(db, "ladderUsers", uid);
-    const snap = await getDoc(ref);
-    const rawXP = snap.exists() ? snap.data()?.xp ?? 0 : 0;
+    // Lifetime XP
+    const ladderRef = doc(db, "ladderUsers", uid);
+    const ladderSnap = await getDoc(ladderRef);
+
     const previousXP =
-      typeof rawXP === "number" ? rawXP : parseInt(rawXP, 10) || 0;
+      ladderSnap.exists() && typeof ladderSnap.data()?.xp === "number"
+        ? ladderSnap.data()?.xp
+        : 0;
+const { mult, streak } = await getXpMultiplier();
+const boostedXp = Math.round(xp * mult);
 
-    const newXP = previousXP + xp;
+console.log(`🔥 XP Multiplier: x${mult} (streak ${streak})  base=${xp}  boosted=${boostedXp}`);
+    const newXP = previousXP + boostedXp;
 
-    // Write lifetime XP + season marker
     await setDoc(
-      ref,
+      ladderRef,
       {
         uid,
         username,
-        xp: newXP, // lifetime XP (unchanged meaning)
+        xp: newXP,
         lastUpdated: Date.now(),
         currentSeason: seasonId,
       },
       { merge: true }
     );
 
-    // ✅ Season XP (scoped to current season)
-const seasonRef = doc(db, "seasonUsers", `${seasonId}_${uid}`);
+    // Season XP
+    const seasonRef = doc(db, "seasonUsers", `${seasonId}_${uid}`);
 
-await setDoc(
-  seasonRef,
-  {
-    uid,
-    username,
-    seasonId,
-    xp: increment(xp),
-    updatedAt: Date.now(),
-  },
-  { merge: true }
-);
-
-   
-
-    // Update global player stats (leaderboard support)
-    try {
-      const statsRef = doc(db, "players", username);
-      await updateDoc(statsRef, {
-        totalWins: increment(1),
-        totalGames: increment(1),
-      });
-      console.log("🔥 Player stats updated for leaderboard");
-    } catch (err) {
-      console.log("⚠️ Could not update player stats:", err);
-    }
-
-    // Update local stats cache
-    try {
-      const local = await getLocalStats();
-      if (local) {
-        local.totalGames += 1;
-        local.totalWins += 1;
-        await saveLocalStats(local);
-      }
-    } catch (e) {
-      console.log("⚠️ Local stats update failed:", e);
-    }
+    await setDoc(
+      seasonRef,
+      {
+        uid,
+        username,
+        seasonId,
+        xp: increment(xp),
+        updatedAt: Date.now(),
+      },
+      { merge: true }
+    );
 
     console.log(`🔥 XP awarded: +${xp} → total: ${newXP}`);
   } catch (err) {
@@ -152,9 +119,6 @@ await setDoc(
    CACHED READ
 ============================ */
 
-/**
- * Read cached ladder stats for UI (legend / profile / ladder screens).
- */
 export const getCachedLadderData = async (): Promise<PlayerStats | null> => {
   try {
     const raw = await AsyncStorage.getItem("ladderStats");
@@ -166,5 +130,4 @@ export const getCachedLadderData = async (): Promise<PlayerStats | null> => {
   } catch {
     return null;
   }
-  
 };

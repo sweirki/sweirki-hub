@@ -2,7 +2,10 @@ import { Stack, useRouter } from "expo-router";
 import { initRevenueCat } from "../src/lib/revenuecat";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useEffect, useState, useRef } from "react";
-import { View, ActivityIndicator, Platform } from "react-native";
+import { View, ActivityIndicator, Platform, TouchableOpacity, Text } from "react-native";
+import { doc, setDoc, serverTimestamp } from "firebase/firestore";
+import { db } from "../firebase";
+import { bumpActivityOnSessionStart, } from "../src/analytics/playerAnalytics";
 import * as Font from "expo-font";
 import * as SplashScreen from "expo-splash-screen";
 
@@ -93,110 +96,73 @@ useEffect(() => {
 }, [user]);
 
 
-/* ================= SESSION TRACKING (PHASE 8B) ================= */
+/* ================= SESSION TRACKING (Phase 8B) ================= */
 useEffect(() => {
   if (!user) return;
 
-  let active = true;
+  let mounted = true;
+  sessionStartRef.current = Date.now();
 
-  const startSession = async () => {
-   sessionStartRef.current = Date.now();
-
-    try {
-      
-   const analytics = await safeFirestoreCall(
-  () => getAnalytics(user.uid),
-  null
-);
-
-if (!analytics) return;
-
-      // 🔁 Phase 8B — activity & streak logic
-const now = Date.now();
-const todayKey = getDayKey(now);
-const lastActiveKey = analytics.identity.lastActiveAt
-  ? getDayKey(analytics.identity.lastActiveAt)
-  : null;
-
-if (todayKey !== lastActiveKey) {
-  // if last activity was yesterday → continue streak
-  if (
-    analytics.identity.lastActiveAt &&
-    now - analytics.identity.lastActiveAt < 1000 * 60 * 60 * 24 * 2
-  ) {
-    analytics.streaks.activityCurrent += 1;
-  } else {
-    analytics.streaks.activityCurrent = 1;
-  }
-
-  analytics.streaks.activityBest = Math.max(
-    analytics.streaks.activityBest,
-    analytics.streaks.activityCurrent
-  );
-}
-
-// update last active timestamp
-analytics.identity.lastActiveAt = now;
-
-      await AsyncStorage.setItem(
-        `analytics:${user.uid}`,
-        JSON.stringify(analytics)
-      );
-    } catch {
-      // silent — analytics must never block app
-    }
+  const start = async () => {
+    // activity streak bump (authoritative, cloud + cached)
+    await bumpActivityOnSessionStart();
+    sessionStartRef.current = Date.now();
   };
 
-  const endSession = async () => {
+  const end = async () => {
     if (!sessionStartRef.current) return;
 
-    const durationSec = Math.floor(
-   (Date.now() - sessionStartRef.current) / 1000
-    );
+    const uid = auth.currentUser?.uid;
+    if (!uid) return;
+
+    const durationSec = Math.floor((Date.now() - sessionStartRef.current) / 1000);
+    sessionStartRef.current = null;
 
     try {
-     const analytics = await safeFirestoreCall(
-  () => getAnalytics(user.uid),
-  null
-);
+      const analytics = await getAnalytics();
 
-if (!analytics) return;
+      // increment sessions
+      const prevN = analytics.sessions.totalSessions;
+      const nextN = prevN + 1;
 
+      const prevAvg = analytics.sessions.avgSessionTimeSec || 0;
+      analytics.sessions.avgSessionTimeSec = (prevAvg * prevN + durationSec) / nextN;
 
-      const prevAvg = analytics.sessions.avgSessionTimeSec;
-      const n = analytics.sessions.totalSessions;
+      analytics.sessions.totalSessions = nextN;
+      analytics.sessions.lastSessionAt = Date.now();
 
-      analytics.sessions.avgSessionTimeSec =
-        (prevAvg * (n - 1) + durationSec) / n;
-
-      await AsyncStorage.setItem(
-        `analytics:${user.uid}`,
-        JSON.stringify(analytics)
+      // persist
+      await AsyncStorage.setItem(`analytics:${uid}`, JSON.stringify(analytics));
+      // also write to cloud (non-blocking)
+      await setDoc(
+        doc(db, "users", uid, "meta", "analytics"),
+        {
+          sessions: analytics.sessions,
+          identity: { ...analytics.identity, lastActiveAt: Date.now() },
+          updatedAt: serverTimestamp(),
+        },
+        { merge: true }
       );
     } catch {
       // silent
     }
   };
 
-  startSession();
+  start();
 
   const sub = AppState.addEventListener("change", (state) => {
-    if (state === "background") {
-      endSession();
-    }
-    if (state === "active") {
-      startSession();
-    }
+    if (!mounted) return;
+
+    if (state === "background") end();
+    if (state === "active") start();
   });
 
   return () => {
-    active = false;
+    mounted = false;
     sub.remove();
-    endSession();
+    end();
   };
 }, [user]);
-
-
 
   /* ================= REVENUECAT INIT ================= */
   useEffect(() => {
@@ -274,6 +240,7 @@ if (loading || !fontsReady) {
   return (
     <View style={{ flex: 1 }}>
       <RankUpPopup />
+
 
     <Stack
   screenOptions={{

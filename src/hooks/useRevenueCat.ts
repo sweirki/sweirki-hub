@@ -54,9 +54,15 @@ export function useRevenueCat() {
     });
 
     // Offerings are optional (non-fatal)
-    Purchases.getOfferings()
-      .then((offs) => alive && setOfferings(offs))
-      .catch(() => {});
+ Purchases.getOfferings()
+  .then((offs) => {
+    console.log("🔎 OFFERINGS:", JSON.stringify(offs, null, 2));
+    alive && setOfferings(offs);
+  })
+  .catch((e) => {
+    console.log("❌ OFFERINGS ERROR:", e);
+  });
+
 
     return () => {
       alive = false;

@@ -31,8 +31,8 @@ import { auth, db } from "../firebase";
 type Tab = "daily" | "season" | "all";
 
 const SEASON_LENGTH_DAYS = 28;
-const getTodayId = () =>
-  new Date().toISOString().slice(0, 10); // YYYY-MM-DD
+const getTodayId = () => new Date().toISOString().slice(0, 10); // YYYY-MM-DD
+
 const LEAGUE_UI: Record<string, { color: string; badge: string }> = {
   Grandmaster: { color: "#E74C3C", badge: "👑" },
   Master: { color: "#9B59B6", badge: "🔥" },
@@ -42,26 +42,35 @@ const LEAGUE_UI: Record<string, { color: string; badge: string }> = {
   Bronze: { color: "#CD7F32", badge: "🥉" },
 };
 
-
-
 function getDisplayName(item: any, user: any, userNames: Record<string, string>) {
-  if (item.uid === user?.uid) return "You";
-  return userNames[item.uid] || "Anonymous";
+  if (item.uid && item.uid === user?.uid) return "You";
+
+  // Daily rows store a username directly
+  if (item.user) return item.user;
+
+  // Season / All-Time rows can resolve by uid
+  if (item.uid) return userNames[item.uid] || item.username || "Anonymous";
+
+  return item.username || "Anonymous";
 }
 
 async function loadUserNamesFromRows(rows: any[], existing: Record<string, string>) {
-  const missingUids = rows.map(r => r.uid).filter(uid => uid && !existing[uid]);
+  const missingUids = rows
+    .map((r) => r.uid)
+    .filter((uid) => uid && !existing[uid]);
+
   if (!missingUids.length) return existing;
 
   const updates = { ...existing };
   await Promise.all(
-    missingUids.map(async uid => {
+    missingUids.map(async (uid) => {
       try {
         const snap = await getDoc(doc(db, "users", uid));
         if (snap.exists()) {
           const data = snap.data();
-          updates[uid] =
-            data.displayName || data.username || data.name || "Anonymous";
+          updates[uid] = data.displayName || data.username || data.name || "Anonymous";
+        } else {
+          updates[uid] = "Anonymous";
         }
       } catch {
         updates[uid] = "Anonymous";
@@ -87,18 +96,20 @@ function getSeasonDaysLeftText() {
 
 export default function LeaderboardScreen() {
   const [dailyStatus, setDailyStatus] = useState<"idle" | "played">("idle");
-const { isPremium } = useRevenueCat();
-  const themeColors = getColors() ?? {};
-const bgDark = themeColors.bgDark ?? "#0E1A2B";
-const bgMid  = themeColors.bgMid  ?? "#10263D";
+  const { isPremium } = useRevenueCat();
 
+  const themeColors = getColors() ?? {};
+  const bgDark = themeColors.bgDark ?? "#0E1A2B";
+  const bgMid = themeColors.bgMid ?? "#10263D";
 
   const [tab, setTab] = useState<Tab>("season");
   const [user, setUser] = useState<any>(null);
   const [profile, setProfile] = useState<any>(null);
   const [loading, setLoading] = useState(true);
+
   const [percentileValue, setPercentileValue] = useState(50);
   const [myRank, setMyRank] = useState(0);
+
   const [rows, setRows] = useState<any[]>([]);
   const [ladderXP, setLadderXP] = useState(0);
   const [userNames, setUserNames] = useState<Record<string, string>>({});
@@ -109,143 +120,129 @@ const bgMid  = themeColors.bgMid  ?? "#10263D";
 
   const aroundYouRows = useMemo(() => {
     if (tab !== "season") return rows;
-    const index = rows.findIndex(r => r.uid === user?.uid);
+    const index = rows.findIndex((r) => r.uid === user?.uid);
     if (index === -1) return rows;
     return rows.slice(Math.max(0, index - 2), Math.min(rows.length, index + 3));
   }, [rows, tab, user]);
 
-useEffect(() => {
-  const unsub = onAuthStateChanged(auth, async u => {
-    if (!u) {
-      setUser(null);
-      setProfile(null);
-      setLoading(false);
-      return;
-    }
-
-    setUser(u);
-    try {
-      const snap = await getDoc(doc(db, "users", u.uid));
-      if (snap.exists()) setProfile(snap.data());
-
-      // ✅ ADD THESE 2 LINES
-      const ladderSnap = await getDoc(doc(db, "ladderUsers", u.uid));
-      setLadderXP(ladderSnap.exists() ? ladderSnap.data().xp ?? 0 : 0);
-
-    } finally {
-      setLoading(false);
-    }
-  });
-
-  return unsub;
-}, []);
-
+  const listData = useMemo(() => {
+    return tab === "season" ? aroundYouRows : rows;
+  }, [tab, aroundYouRows, rows]);
 
   useEffect(() => {
-  const checkSeasonChange = async () => {
-    try {
-      const current = getCurrentSeasonId();
-      const stored = await AsyncStorage.getItem("lastSeenSeasonId");
-
-      if (stored === null) {
-        // First launch ever
-        await AsyncStorage.setItem("lastSeenSeasonId", String(current));
+    const unsub = onAuthStateChanged(auth, async (u) => {
+      if (!u) {
+        setUser(null);
+        setProfile(null);
+        setLoading(false);
         return;
       }
 
-      const last = Number(stored);
+      setUser(u);
+      try {
+        const snap = await getDoc(doc(db, "users", u.uid));
+        if (snap.exists()) setProfile(snap.data());
 
-    if (last !== current) {
-  // 🔒 Prevent double archive
-  const archived = await AsyncStorage.getItem(`seasonArchived:${last}`);
+        const ladderSnap = await getDoc(doc(db, "ladderUsers", u.uid));
+        setLadderXP(ladderSnap.exists() ? ladderSnap.data().xp ?? 0 : 0);
+      } finally {
+        setLoading(false);
+      }
+    });
 
-  if (!archived) {
-    try {
-      // 1️⃣ Read final season leaderboard
+    return unsub;
+  }, []);
 
-    const q = query(
-  collection(db, "seasonUsers"),
- where("seasonId", "==", last),
-  orderBy("xp", "desc")
-);
+  // Season rollover archive (kept as you already had it)
+  useEffect(() => {
+    const checkSeasonChange = async () => {
+      try {
+        const current = getCurrentSeasonId();
+        const stored = await AsyncStorage.getItem("lastSeenSeasonId");
 
+        if (stored === null) {
+          await AsyncStorage.setItem("lastSeenSeasonId", String(current));
+          return;
+        }
 
-      const snap = await getDocs(q);
-    
-    const rows = snap.docs.map((d, idx) => {
-  const data = d.data();
-  const xp = data.xp ?? 0;
-  const seasonRank = getSeasonRank(xp);
-  const outcome = getSeasonOutcome(xp, seasonRank as any);
+        const last = Number(stored);
 
-  return {
-    id: d.id,
-    ...data,
-    rank: idx + 1,
-    seasonRank,
-    outcome, // "promote" | "stay" | "demote"
-  };
-});
+        if (last !== current) {
+          const archived = await AsyncStorage.getItem(`seasonArchived:${last}`);
 
+          if (!archived) {
+            try {
+              const q = query(
+                collection(db, "seasonUsers"),
+                where("seasonId", "==", last),
+                orderBy("xp", "desc")
+              );
 
-      // 2️⃣ Archive season snapshot
-      await archiveSeason(last, rows);
+              const snap = await getDocs(q);
 
-// 3️⃣ Set season change for current user (promotion / demotion)
-const me = rows.find(r => r.uid === user?.uid);
+              const rows = snap.docs.map((d, idx) => {
+                const data = d.data();
+                const xp = data.xp ?? 0;
+                const seasonRank = getSeasonRank(xp);
+                const outcome = getSeasonOutcome(xp, seasonRank as any);
 
-if (me && me.outcome !== "stay") {
-  setSeasonChange({
-    direction: me.outcome === "promote" ? "up" : "down",
-    to: me.seasonRank,
-  });
-}
+                return {
+                  id: d.id,
+                  ...data,
+                  rank: idx + 1,
+                  seasonRank,
+                  outcome,
+                };
+              });
 
+              await archiveSeason(last, rows);
 
+              const me = rows.find((r) => r.uid === user?.uid);
+              if (me && me.outcome !== "stay") {
+                setSeasonChange({
+                  direction: me.outcome === "promote" ? "up" : "down",
+                  to: me.seasonRank,
+                });
+              }
 
-      // 4️⃣ Mark archived (idempotent)
-      await AsyncStorage.setItem(`seasonArchived:${last}`, "true");
-    } catch (e) {
-      console.warn("Season archive failed", e);
-    }
-  }
+              await AsyncStorage.setItem(`seasonArchived:${last}`, "true");
+            } catch (e) {
+              console.warn("Season archive failed", e);
+            }
+          }
 
-  await AsyncStorage.setItem("lastSeasonEnded", String(last));
-  await AsyncStorage.setItem("lastSeenSeasonId", String(current));
-}
+          await AsyncStorage.setItem("lastSeasonEnded", String(last));
+          await AsyncStorage.setItem("lastSeenSeasonId", String(current));
+        }
+      } catch {}
+    };
 
-    } catch {}
-  };
+    checkSeasonChange();
+  }, []);
 
-  checkSeasonChange();
-}, []);
-
-
-
+  // ✅ SEASON TAB
   useEffect(() => {
     if (!user || tab !== "season") return;
 
     const run = async () => {
       try {
-     const seasonId = getCurrentSeasonId();
+        const seasonId = getCurrentSeasonId();
 
-const todayId = getTodayId();
+        const q = query(
+          collection(db, "seasonUsers"),
+          where("seasonId", "==", seasonId),
+          orderBy("xp", "desc")
+        );
 
-const q = query(
-  collection(db, "seasonUsers"),
-  where("seasonId", "==", seasonId),
-  orderBy("xp", "desc")
-);
+        const snap = await getDocs(q);
 
-      const snap = await getDocs(q);
-const base = snap.docs.map(d => ({ id: d.id, ...d.data() }));
-const data = base
-  .sort((a: any, b: any) => (b.xp ?? 0) - (a.xp ?? 0))
-  .map((r: any, idx: number) => ({
-    ...r,
-    rank: idx + 1,
-  }));
-
+        const base = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+        const data = base
+          .sort((a: any, b: any) => (b.xp ?? 0) - (a.xp ?? 0))
+          .map((r: any, idx: number) => ({
+            ...r,
+            rank: idx + 1,
+          }));
 
         if (!data.length) {
           setRows([]);
@@ -254,7 +251,7 @@ const data = base
           return;
         }
 
-        const myIndex = data.findIndex(r => r.uid === user.uid);
+        const myIndex = data.findIndex((r) => r.uid === user.uid);
         const rank = myIndex + 1;
         const percentile = Math.ceil((rank / data.length) * 100);
 
@@ -263,6 +260,7 @@ const data = base
         setPercentileValue(percentile);
         setUserNames(await loadUserNamesFromRows(data, userNames));
       } catch {
+        setRows([]);
         setPercentileValue(50);
         setMyRank(0);
       }
@@ -270,97 +268,74 @@ const data = base
 
     run();
   }, [user, tab]);
-useEffect(() => {
-  if (!user || tab !== "daily") return;
 
-  const run = async () => {
-    try {
-      const today = getTodayId();
-    const played = await AsyncStorage.getItem(`dailyPlayed:${user.uid}`);
+  // ✅ DAILY TAB: reads dailyLeaderboard/{today}.scores[]
+  useEffect(() => {
+    if (!user || tab !== "daily") return;
 
-// ❌ Only block FREE users
-if (!isPremium && played === today) {
-  setRows([]);
-  setDailyStatus("played");
-  return;
-}
+    const run = async () => {
+      try {
+        const today = getTodayId();
+        const played = await AsyncStorage.getItem(`dailyPlayed:${user.uid}`);
 
-setDailyStatus("idle");
+        setDailyStatus(!isPremium && played === today ? "played" : "idle");
 
+        const dailyRef = doc(db, "dailyLeaderboard", today);
+        const snap = await getDoc(dailyRef);
 
-      const q = query(
-        collection(db, "leaderboard"),
-        where("period", "==", "daily"),
-        where("dailyId", "==", today),
-        orderBy("errors", "asc"),
-        orderBy("time", "asc")
-      );
+        const scores = snap.exists() ? snap.data().scores || [] : [];
 
-      const snap = await getDocs(q);
-      const data = snap.docs.map(d => ({ id: d.id, ...d.data() }));
-      setRows(data);
-      setUserNames(await loadUserNamesFromRows(data, userNames));
-    } catch {
-      setRows([]);
-    }
-  };
+        const sorted = [...scores].sort((a: any, b: any) => {
+          if ((a.errors ?? 999) !== (b.errors ?? 999)) return (a.errors ?? 999) - (b.errors ?? 999);
+          return (a.time ?? 999999) - (b.time ?? 999999);
+        });
 
-  run();
-}, [user, tab]);
+        const data = sorted.map((r: any, idx: number) => ({
+          id: `${today}_${r.uid || r.user || idx}`,
+          ...r,
+          rank: idx + 1,
+        }));
 
+        setRows(data);
+        setUserNames(await loadUserNamesFromRows(data, userNames));
+      } catch {
+        setRows([]);
+      }
+    };
 
-useEffect(() => {
-  if (!user || tab !== "all") return;
+    run();
+  }, [user, tab, isPremium]);
 
-  const run = async () => {
-    try {
-      const q = query(
-        collection(db, "leaderboard"),
-        where("period", "==", "season"),
-        orderBy("points", "desc")
-      );
+  // ✅ ALL-TIME TAB: reads ladderUsers (lifetime XP)
+  useEffect(() => {
+    if (!user || tab !== "all") return;
 
-    const snap = await getDocs(q);
-const base = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+    const run = async () => {
+      try {
+        const q = query(collection(db, "ladderUsers"), orderBy("xp", "desc"));
+        const snap = await getDocs(q);
 
-// ✅ Aggregate: keep BEST run per user
-type LeaderboardRow = {
-  id: string;
-  uid?: string;
-  username?: string;
-  points?: number;
-  [key: string]: any;
-};
+        const data = snap.docs.map((d, idx) => {
+          const v: any = d.data();
+          return {
+            id: d.id,
+            ...v,
+            uid: v.uid || d.id,
+            rank: idx + 1,
+          };
+        });
 
-const bestByUid: Record<string, LeaderboardRow> = {};
+        setRows(data);
+        setUserNames(await loadUserNamesFromRows(data, {}));
+      } catch {
+        setRows([]);
+      }
+    };
 
-for (const row of base as LeaderboardRow[]) {
-  const key = row.uid || row.username;
-  if (!key) continue;
+    run();
+  }, [user, tab]);
 
-  const p = typeof row.points === "number" ? row.points : -Infinity;
-  const prev = bestByUid[key];
-  const prevP = prev && typeof prev.points === "number" ? prev.points : -Infinity;
-
-  if (!prev || p > prevP) bestByUid[key] = row;
-}
-
-const data = Object.values(bestByUid)
-  .sort((a: any, b: any) => (b.points ?? 0) - (a.points ?? 0))
-  .map((r: any, idx: number) => ({ ...r, rank: idx + 1 }));
-
-setRows(data);
-setUserNames(await loadUserNamesFromRows(data, userNames));
-
-    } catch {
-      setRows([]);
-    }
-  };
-
-  run();
-}, [user, tab]);
-
-
+  // Past seasons load (unchanged)
   useEffect(() => {
     if (!user) return;
 
@@ -398,8 +373,7 @@ setUserNames(await loadUserNamesFromRows(data, userNames));
 
   return (
     <ImageBackground source={require("../assets/bg.png")} style={styles.bg}>
-     <LinearGradient colors={[bgDark, bgMid]} style={styles.container}>
-
+      <LinearGradient colors={[bgDark, bgMid]} style={styles.container}>
         {loading ? (
           <View style={styles.center}>
             <ActivityIndicator />
@@ -443,7 +417,7 @@ setUserNames(await loadUserNamesFromRows(data, userNames));
             </Text>
 
             <View style={styles.tabs}>
-              {(["daily", "season", "all"] as Tab[]).map(t => (
+              {(["daily", "season", "all"] as Tab[]).map((t) => (
                 <TouchableOpacity
                   key={t}
                   onPress={() => setTab(t)}
@@ -455,7 +429,7 @@ setUserNames(await loadUserNamesFromRows(data, userNames));
                   <Text
                     style={[
                       styles.tabText,
-                      tab === t && (t === "season" ? styles.tabTextDark : styles.tabTextDark),
+                      tab === t && styles.tabTextDark,
                     ]}
                   >
                     {t === "daily" ? "Daily" : t === "season" ? "Season" : "All-Time"}
@@ -465,95 +439,106 @@ setUserNames(await loadUserNamesFromRows(data, userNames));
             </View>
 
             <FlatList
-  style={styles.list}
- data={rows}
-  keyExtractor={item => item.id}
- ListEmptyComponent={
-  tab === "daily" ? (
-    <Text style={styles.empty}>
-      {dailyStatus === "played"
-        ? "You’ve completed today’s Daily. Come back tomorrow."
-        : "No daily runs yet. Be the first today."}
-    </Text>
-  ) : null
-}
+              style={styles.list}
+              data={listData}
+              keyExtractor={(item) => item.id}
+              ListEmptyComponent={
+                tab === "daily" ? (
+                  <Text style={styles.empty}>
+                    {dailyStatus === "played"
+                      ? "You’ve completed today’s Daily. Come back tomorrow."
+                      : "No daily runs yet. Be the first today."}
+                  </Text>
+                ) : (
+                  <Text style={styles.empty}>
+                    {tab === "season"
+                      ? "No season rankings yet. Play any mode to earn XP."
+                      : "No All-Time rankings yet."}
+                  </Text>
+                )
+              }
+              renderItem={({ item }) => (
+                <View
+                  style={[
+                    styles.row,
+                    item.uid === user?.uid && {
+                      borderLeftColor: leagueUI.color,
+                      borderLeftWidth: 3,
+                      backgroundColor: "rgba(255,215,120,0.04)",
+                      paddingLeft: 8,
+                    },
+                  ]}
+                >
+                  <Text
+                    style={[
+                      styles.rowName,
+                      item.uid === user?.uid && styles.rowNameYou,
+                    ]}
+                  >
+                    #{item.rank} {getDisplayName(item, user, userNames)}
+                  </Text>
 
+                  {tab === "daily" && (
+                    <Text style={styles.rowSub}>
+                      {typeof item.errors === "number" ? `${item.errors} errors` : "—"}
+                      {typeof item.time === "number" ? ` • ${item.time}s` : ""}
+                    </Text>
+                  )}
 
-  renderItem={({ item }) => (
-    <View
-      style={[
-        styles.row,
-        item.uid === user?.uid && {
-          borderLeftColor: leagueUI.color,
-          borderLeftWidth: 3,
-          backgroundColor: "rgba(255,215,120,0.04)",
-          paddingLeft: 8,
-        },
-      ]}
-    >
-      <Text
-        style={[
-          styles.rowName,
-          item.uid === user?.uid && styles.rowNameYou,
-        ]}
-      >
-        #{item.rank}
-{getDisplayName(item, user, userNames)}
+                  {tab === "season" && (
+                    <Text style={styles.rowSub}>
+                      {typeof item.xp === "number" ? `${item.xp} XP` : "—"}
+                    </Text>
+                  )}
 
-      </Text>
+                  {tab === "all" && (
+                    <Text style={styles.rowSub}>
+                      {typeof item.xp === "number" ? `${item.xp} XP` : "—"}
+                    </Text>
+                  )}
+                </View>
+              )}
+              ListFooterComponent={
+                <>
+                  <View style={styles.archive}>
+                    <Text style={styles.archiveTitle}>Past Seasons</Text>
+                    {seasonArchive.map((s) => {
+                      const ui = LEAGUE_UI[s.league];
+                      return (
+                        <View key={s.season} style={styles.archiveRow}>
+                          <Text style={styles.archiveSeason}>Season {s.season}</Text>
+                          <Text style={[styles.archiveLeague, { color: ui.color }]}>
+                            {ui.badge} {s.league} • #{s.rank}
+                          </Text>
+                        </View>
+                      );
+                    })}
+                  </View>
 
-      {tab === "daily" && (
-        <Text style={styles.rowSub}>
-          Daily Run
+                  <View style={styles.footer}>
+                    <Text style={styles.xp}>XP: {ladderXP}</Text>
+                    <Text style={styles.footerNote}>
+                      Your progress continues beyond the Ladder
+                    </Text>
+                  </View>
+                </>
+              }
+            />
 
-        </Text>
-      )}
-
-   {tab === "season" && (
-  <Text style={styles.rowSub}>
-    {typeof item.xp === "number" ? `${item.xp} XP` : "—"}
-  </Text>
-)}
-
-{tab === "all" && (
-  <Text style={styles.rowSub}>
-    {typeof item.points === "number" ? `${item.points} pts` : "—"}
-  </Text>
-)}
-
-
-    </View>
-  )}
-  ListFooterComponent={
-    <>
-      {/* PAST SEASONS */}
-      <View style={styles.archive}>
-        <Text style={styles.archiveTitle}>Past Seasons</Text>
-        {seasonArchive.map(s => {
-          const ui = LEAGUE_UI[s.league];
-          return (
-            <View key={s.season} style={styles.archiveRow}>
-              <Text style={styles.archiveSeason}>Season {s.season}</Text>
-              <Text style={[styles.archiveLeague, { color: ui.color }]}>
-                {ui.badge} {s.league} • #{s.rank}
-              </Text>
-            </View>
-          );
-        })}
-      </View>
-
-      {/* FOOTER */}
-      <View style={styles.footer}>
-       <Text style={styles.xp}>XP: {ladderXP}</Text>
-        <Text style={styles.footerNote}>
-          Your progress continues beyond the Ladder
-        </Text>
-      </View>
-    </>
-  }
-/>
-
-           
+            {/* DEV RESET BUTTON (optional, keep if you want it here) */}
+           {/*  {__DEV__ && (
+              <TouchableOpacity style={styles.devReset} onPress={async () => {
+                if (!user) return;
+                await AsyncStorage.multiRemove([
+                  `dailyPlayed:${user.uid}`,
+                  `dailyStreak:${user.uid}`,
+                  `lastDailyDate:${user.uid}`,
+                  `weeklyGames:${user.uid}`,
+                ]);
+              }}>
+                <Text style={styles.devResetText}>DEV RESET DAILY</Text>
+              </TouchableOpacity>
+            )} */}
           </>
         )}
       </LinearGradient>
@@ -565,7 +550,6 @@ const styles = StyleSheet.create({
   bg: { flex: 1 },
   container: { flex: 1, padding: 16, paddingTop: 66 },
 
-  
   center: { flex: 1, justifyContent: "center", alignItems: "center" },
 
   seasonText: {
@@ -625,15 +609,15 @@ const styles = StyleSheet.create({
 
   empty: {
     marginTop: 40,
-     fontSize: 11,
+    fontSize: 11,
     textAlign: "center",
     color: "rgba(255,255,255,0.6)",
   },
 
   row: {
-    paddingVertical: 6,
+    paddingVertical: 8,
     borderBottomWidth: 0.5,
-    borderBottomColor: "#333",
+    borderBottomColor: "rgba(255,255,255,0.12)",
   },
 
   rowName: {
@@ -658,7 +642,7 @@ const styles = StyleSheet.create({
   archiveTitle: {
     fontSize: 12,
     fontWeight: "600",
-    marginBottom: 30,
+    marginBottom: 14,
     color: "#F5F5F5",
   },
 
@@ -689,37 +673,49 @@ const styles = StyleSheet.create({
     lineHeight: 15,
     color: "rgba(255,255,255,0.45)",
   },
+
   tabs: {
-  flexDirection: "row",
-  marginTop: 20,
-},
+    flexDirection: "row",
+    marginTop: 20,
+  },
 
-tab: {
-  marginRight: 10,
-  paddingVertical: 6,
-  paddingHorizontal: 14,
-  borderRadius: 18,
-  backgroundColor: "#2A2A2A",
-},
+  tab: {
+    marginRight: 10,
+    paddingVertical: 6,
+    paddingHorizontal: 14,
+    borderRadius: 18,
+    backgroundColor: "#2A2A2A",
+  },
 
-tabActive: {
-  backgroundColor: "#E0E0E0",
-},
+  tabActive: {
+    backgroundColor: "#E0E0E0",
+  },
 
-tabSeason: {
-  backgroundColor: "#FFD36A",
-},
+  tabSeason: {
+    backgroundColor: "#FFD36A",
+  },
 
-tabText: {
-  fontSize: 11,
-  fontWeight: "500",
-  color: "#FFF",
-},
+  tabText: {
+    fontSize: 11,
+    fontWeight: "500",
+    color: "#FFF",
+  },
 
-tabTextDark: {
-  fontSize: 11,
-  fontWeight: "600",
-  color: "#000",
-},
+  tabTextDark: {
+    fontSize: 11,
+    fontWeight: "600",
+    color: "#000",
+  },
 
+  devReset: {
+    position: "absolute",
+    bottom: 40,
+    right: 20,
+    backgroundColor: "red",
+    paddingVertical: 12,
+    paddingHorizontal: 18,
+    borderRadius: 10,
+  },
+
+  devResetText: { color: "#fff", fontWeight: "800" },
 });

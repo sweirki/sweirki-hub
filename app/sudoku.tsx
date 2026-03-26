@@ -48,8 +48,8 @@ import { awardLadderXP, refreshLadderData } from "./lib/ladderBridge";
 
 const SCREEN = Dimensions.get("window");
 const width = SCREEN.width;                   
-const BOARD_SIZE = width - 40;   // always square based on width only
-const CELL_SIZE = BOARD_SIZE / 9;
+const BOARD_SIZE = Math.floor(width - 40);
+const CELL_SIZE = Math.floor(BOARD_SIZE / 9);
 interface SudokuProps {
   onWin?: (result: {
     difficulty: string;
@@ -756,20 +756,21 @@ if (isDaily) {
     setScore(newScore);
 
     await saveWin(
-      username || "Guest",
-      difficulty,
-      time,
-      errorCount,
-      false
-    );
+  username || "Guest",
+  difficulty,
+  time,
+  errorCount,
+  false
+);
 
-// ✅ ADD THIS
 await onGameFinished({
   mode: "classic",
   win: true,
   time,
   errors: errorCount,
+  hintsUsed: 3 - hintsLeft,
 });
+
     
 // 📊 Phase 8A — record Classic analytics (canonical, non-blocking)
 recordGameResult({
@@ -987,21 +988,8 @@ blurRadius={Platform.OS === "android" ? 0 : (winVisible ? 0 : 5)}
 </View>
 
 
-        <View style={{ flex: 1, alignItems: "flex-end" }}>
-          <TouchableOpacity
-  onPress={() => {
-    if (winVisible) return; // PHASE 5B FIX
-    toggleDrawer(true);
-  }}
-  style={{ padding: 4 }}
->
+    <View style={{ flex: 1 }} />
 
-        {/* GOLD ICON */}
-<Ionicons name="menu" size={32} color={colors.buttonSecondaryBg} />
-
-
-          </TouchableOpacity>
-        </View>
       </View>
   {/* Strike Counter */}
 <View style={s.strikeTop}>
@@ -1073,116 +1061,7 @@ blurRadius={Platform.OS === "android" ? 0 : (winVisible ? 0 : 5)}
 
         </ImageBackground>
 
-        {/* ---------------- RIGHT SIDE DRAWER ---------------- */}
-{drawerVisible && !winVisible && (
-  <Modal visible transparent animationType="fade">
-    <View
-      style={{
-        flex: 1,
-        backgroundColor: "rgba(0,0,0,0.55)", // dim behind
-        justifyContent: "center",
-        alignItems: "center",
-      }}
-    >
-
-      {/* DRAWER CARD */}
-      <Animated.View
-        style={{
-          width: "78%",
-          backgroundColor: colors.card,
-          borderRadius: 24,
-          paddingTop: 32,
-          paddingBottom: 26,
-          paddingHorizontal: 24,
-          alignItems: "center",
-          transform: [{ translateX: drawerAnim }],
-        }}
-      >
-
-        {/* TITLE */}
-        <Text
-          style={{
-            fontSize: 22,
-            fontWeight: "800",
-            color: colors.enteredNumber,
-            marginBottom: 16,
-          }}
-        >
-          Menu
-        </Text>
-
-        {/* USER ICON */}
-        <Ionicons
-          name="person-circle"
-          size={72}
-          color={colors.enteredNumber}
-          style={{ marginBottom: 6 }}
-        />
-
-        {/* USER NAME */}
-        <Text
-          style={{
-            fontSize: 18,
-            fontWeight: "700",
-            marginBottom: 24,
-            color: colors.enteredNumber,
-          }}
-        >
-          {username}
-        </Text>
-
-        {/* BUTTONS */}
-        <TouchableOpacity
-          style={s.drawerBtn}
-          onPress={() => {
-            toggleDrawer(false);
-            router.push("/profile");
-          }}
-        >
-          <Text style={s.drawerBtnText}>Profile</Text>
-        </TouchableOpacity>
-
-        <TouchableOpacity
-          style={s.drawerBtn}
-          onPress={() => {
-            toggleDrawer(false);
-            router.push("/stats");
-          }}
-        >
-          <Text style={s.drawerBtnText}>Stats</Text>
-        </TouchableOpacity>
-
-        <TouchableOpacity
-          style={s.drawerBtn}
-          onPress={() => {
-            toggleDrawer(false);
-            router.push("/settings");
-          }}
-        >
-          <Text style={s.drawerBtnText}>Settings</Text>
-        </TouchableOpacity>
-
-        <TouchableOpacity
-          style={s.drawerBtn}
-          onPress={() => {
-            toggleDrawer(false);
-            router.push("/leaderboard");
-          }}
-        >
-          <Text style={s.drawerBtnText}>Leaderboard</Text>
-        </TouchableOpacity>
-
-        <TouchableOpacity
-          style={[s.drawerBtn, { marginTop: 8 }]}
-          onPress={() => toggleDrawer(false)}
-        >
-          <Text style={s.drawerBtnText}>Close</Text>
-        </TouchableOpacity>
-
-      </Animated.View>
-    </View>
-  </Modal>
-)}
+ 
 
 
 
@@ -1441,15 +1320,14 @@ drawerBtn: {
     color: colors.buttonPrimaryBg, // light gold
 
     },
-   board: {
-  width: BOARD_SIZE,
-  aspectRatio: 1,
+
+ board: {
+  width: CELL_SIZE * 9,
+  height: CELL_SIZE * 9,
   alignSelf: "center",
-  marginTop: 2,      // tighter
-  marginBottom: 8,   // reduces space before controls
+  marginTop: 2,
+  marginBottom: 8,
 },
-
-
 
     row: {
       flexDirection: "row",

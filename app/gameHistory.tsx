@@ -7,8 +7,14 @@ import {
   ActivityIndicator,
   ImageBackground,
 } from "react-native";
-import { getAuth } from "firebase/auth";
-import { collection, getDocs, orderBy, query } from "firebase/firestore";
+import { auth } from "../firebase";
+import {
+  collection,
+  getDocs,
+  orderBy,
+  query,
+  limit,
+} from "firebase/firestore";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { db } from "../firebase";
 
@@ -20,24 +26,36 @@ export default function GameHistory() {
   useEffect(() => {
     const fetchGames = async () => {
       try {
-        const auth = getAuth();
         const user = auth.currentUser;
-        const userId = user?.email || user?.uid || "Guest";
+        if (!user) {
+          setGames([]);
+          return;
+        }
 
         const q = query(
-          collection(db, "users", userId, "games"),
-          orderBy("createdAt", "desc")
+          collection(db, "users", user.uid, "games"),
+          orderBy("createdAt", "desc"),
+          limit(50)
         );
 
         const snap = await getDocs(q);
-        const list = snap.docs.map((d) => ({
-          id: d.id,
-          ...d.data(),
-        }));
+
+        const list = snap.docs.map((d) => {
+          const data = d.data();
+          return {
+            id: d.id,
+            mode: data.mode,
+            time: data.time,
+            hintsUsed: data.hintsUsed ?? 0,
+            errors: data.errors ?? 0,
+            createdAt: data.createdAt,
+          };
+        });
 
         setGames(list);
       } catch (err) {
         console.error("Failed to fetch game history:", err);
+        setGames([]);
       } finally {
         setLoading(false);
       }
@@ -77,12 +95,12 @@ export default function GameHistory() {
           renderItem={({ item }) => (
             <View style={styles.card}>
               <Text style={styles.line}>🎮 Mode: {item.mode}</Text>
-              <Text style={styles.line}>⏱ Time: {item.timeTaken}s</Text>
+              <Text style={styles.line}>⏱ Time: {item.time}s</Text>
               <Text style={styles.line}>💡 Hints: {item.hintsUsed}</Text>
               <Text style={styles.line}>❌ Errors: {item.errors}</Text>
               <Text style={styles.date}>
                 🗓{" "}
-                {item.createdAt?.toDate?.().toLocaleString?.() || ""}
+                {item.createdAt?.toDate?.().toLocaleString?.() ?? ""}
               </Text>
             </View>
           )}

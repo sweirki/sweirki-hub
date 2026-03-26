@@ -117,14 +117,7 @@ export default function Controls({
     disabled={locked}
   />
 
-  {__DEV__ && (
-    <Btn
-      label="Solve"
-      onPress={onSolve}
-      highlight
-      disabled={locked}
-    />
-  )}
+ 
 </View>
 
 
