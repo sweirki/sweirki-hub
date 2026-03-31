@@ -16,7 +16,7 @@ import { signInWithEmailAndPassword, sendPasswordResetEmail } from "firebase/aut
 import { doc, getDoc } from "firebase/firestore";
 import { theme } from "../theme";
 import { LinearGradient } from "expo-linear-gradient";
-
+import Purchases from "react-native-purchases";
 
 export default function Login() {
   const [email, setEmail] = useState("");
@@ -34,39 +34,44 @@ const [popup, setPopup] = useState<{
   }, []);
 
   const handleLogin = async () => {
-    if (!email || !password) {
-      setPopup({
-  title: "Error",
-  message: "Please enter both email and password.",
-});
+  if (!email || !password) {
+    setPopup({
+      title: "Error",
+      message: "Please enter both email and password.",
+    });
+    return;
+  }
 
-      return;
+  try {
+    const userCred = await signInWithEmailAndPassword(auth, email, password);
+    const uid = userCred.user.uid;
+
+    // Connect RevenueCat to this exact Firebase user
+    await Purchases.logIn(uid);
+
+    await AsyncStorage.setItem("uid", uid);
+    await AsyncStorage.setItem("email", email);
+
+    const userRef = doc(db, "users", uid);
+    const snap = await getDoc(userRef);
+
+    if (snap.exists()) {
+      const data = snap.data();
+      await AsyncStorage.setItem("username", data.username || "");
+      await AsyncStorage.setItem("avatarUri", data.avatarUri || "");
+    } else {
+      await AsyncStorage.removeItem("username");
+      await AsyncStorage.removeItem("avatarUri");
     }
 
-    try {
-      const userCred = await signInWithEmailAndPassword(auth, email, password);
-      const uid = userCred.user.uid;
-
-      await AsyncStorage.setItem("uid", uid);
-      await AsyncStorage.setItem("email", email);
-
-      const userRef = doc(db, "users", uid);
-      const snap = await getDoc(userRef);
-      if (snap.exists()) {
-        const data = snap.data();
-        await AsyncStorage.setItem("username", data.username || "");
-        await AsyncStorage.setItem("avatarUri", data.avatarUri || "");
-      }
-
-      router.replace("/splash");
-    } catch (err: any) {
-  setPopup({
-  title: "Login failed",
-  message: "Invalid email or password.",
-});
-
-    }
-  };
+    router.replace("/splash");
+  } catch (err: any) {
+    setPopup({
+      title: "Login failed",
+      message: "Invalid email or password.",
+    });
+  }
+};
 const handleForgotPassword = async () => {
   if (!email) {
    setPopup({
@@ -143,20 +148,6 @@ placeholderTextColor="#D8B24A" // gold placeholder text
   <Text style={styles.forgot}>Forgot password?</Text>
 </TouchableOpacity>
 
-
-<TouchableOpacity
-  onPress={() => {
-    setPopup({
-      title: "Google Sign-In",
-      message: "Google sign-in is temporarily disabled.",
-    });
-  }}
-  style={styles.googleBtn}
->
-
-
-  <Text style={styles.googleText}>Continue with Google</Text>
-</TouchableOpacity>
 
 
           <TouchableOpacity onPress={() => router.push("/signup")}>
@@ -246,22 +237,7 @@ const styles = StyleSheet.create({
   fontSize: 14,
   fontWeight: "600",
 },
-googleBtn: {
-  width: "100%",
-  height: 50,
-  borderRadius: theme.spacing.borderRadius,
-  borderWidth: 1,
-  borderColor: "#FBE7A1",
-  alignItems: "center",
-  justifyContent: "center",
-  marginTop: 12,
-},
 
-googleText: {
-  color: "#FBE7A1",
-  fontSize: 16,
-  fontWeight: "700",
-},
 
 popupOverlay: {
   position: "absolute",

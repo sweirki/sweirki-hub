@@ -15,7 +15,7 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import * as ImagePicker from "expo-image-picker";
 import { useRevenueCat } from "../src/hooks/useRevenueCat";
 import { TIER_ICONS } from "../utils/ladder/tierIcons";
-
+import Purchases from "react-native-purchases";
 import { auth, db } from "../firebase";
 import {
   doc,
@@ -30,7 +30,7 @@ import { getLadderRank, getSeasonRank } from "../utils/ladder/scoreEngine";
 import RequireAuth from "./RequireAuth";
 import { theme } from "../theme";
 import { useRouter } from "expo-router";
-import { router } from "expo-router";
+
 
 const SEASON_LENGTH_DAYS = 28;
 const SEASON_START = new Date("2025-01-01").getTime();
@@ -201,9 +201,20 @@ const handleLogout = () => {
 const confirmLogout = async () => {
   setLogoutVisible(false);
 
+  try {
+    await Purchases.logOut();
+  } catch {}
+
+  await AsyncStorage.multiRemove([
+    "uid",
+    "email",
+    "username",
+    "avatarUri",
+    "lastSeasonRank",
+  ]);
+
   await auth.signOut();
 
-  // 🔑 force app-level reset
   router.replace("/login");
 };
 
@@ -436,12 +447,11 @@ const confirmLogout = async () => {
 <TouchableOpacity
   onPress={async () => {
     try {
-      const result =
-        await require("react-native-purchases").default.restorePurchases();
+      const result = await Purchases.restorePurchases();
 
       await refresh();
 
-      if (result?.activeSubscriptions?.length) {
+      if (result?.entitlements?.active?.premium) {
         setRestoreMessage("✅ Premium restored successfully");
       } else {
         setRestoreMessage("ℹ️ No previous purchases found for this account");

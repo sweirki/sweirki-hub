@@ -11,8 +11,6 @@ import {
   ImageBackground, // Å½Â¨ THEME: added for background image
 } from "react-native";
 import { useAchievementsStore } from "./stores/useAchievementsStore";
-import { recordGameResult } from "../src/analytics/playerAnalytics";
-
 import { getColors } from "./theme/index";
 import { writeSeasonalScore } from "../utils/ladder/scoreEngine";
 import { getCurrentStreak } from "../utils/ladder/scoreEngine";
@@ -624,35 +622,6 @@ await onGameFinished({
 
 setWinVisible(true);
 saveWin(username, "hyper", Timer, errorCount);
-
-// 📊 Phase 8A — record Hyper analytics (canonical, non-blocking)
-recordGameResult({
-  username: auth.currentUser?.uid,
-  mode: "hyper",
-  win: true,
-  timeSec: Timer,
-  errors: errorCount,
-  hintsUsed: 3 - hintsLeft,
-});
-
-
-
-// ⭐ Phase 8E — increment games played (total + hyper)
-try {
-  const totalRaw = await AsyncStorage.getItem("gamesPlayed:total");
-  const hyperRaw = await AsyncStorage.getItem("gamesPlayed:hyper");
-
-  const total = totalRaw ? Number(totalRaw) : 0;
-  const hyper = hyperRaw ? Number(hyperRaw) : 0;
-
-  await AsyncStorage.multiSet([
-    ["gamesPlayed:total", String(total + 1)],
-    ["gamesPlayed:hyper", String(hyper + 1)],
-  ]);
-} catch {
-  // silent fail
-}
-
 
 // ---------- ACHIEVEMENTS ----------
 unlockAchievement("hyper_samurai");

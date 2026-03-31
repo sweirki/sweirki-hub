@@ -1,28 +1,27 @@
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import { View, Text, TouchableOpacity, StyleSheet, Modal } from "react-native";
 import Purchases from "react-native-purchases";
 import { useRevenueCat } from "../src/hooks/useRevenueCat";
-import type { PurchasesPackage } from "react-native-purchases";
 
 export default function UpgradeScreen() {
-  const { isPremium, loading, refresh, offerings } = useRevenueCat();
   const [restoreMessage, setRestoreMessage] = useState<string | null>(null);
-const [purchaseError, setPurchaseError] = useState<string | null>(null);
+  const [purchaseError, setPurchaseError] = useState<string | null>(null);
 
-  const lifetimePackage: PurchasesPackage | null =
-    offerings?.current?.availablePackages?.[0] ?? null;
+  const { isPremium, loading, refresh, resolvedPackage, initError } = useRevenueCat();
 
   const buyLifetime = async () => {
-    if (!lifetimePackage) return;
+    if (!resolvedPackage) return;
+
     try {
-      await Purchases.purchasePackage(lifetimePackage);
+      const { customerInfo } = await Purchases.purchasePackage(resolvedPackage);
       await refresh();
 
-
-        } catch {
-    setPurchaseError("Unable to complete purchase right now.");
-  }
-
+      if (!customerInfo?.entitlements?.active?.premium) {
+        setPurchaseError("Purchase completed but premium was not detected yet.");
+      }
+    } catch {
+      setPurchaseError("Unable to complete purchase right now.");
+    }
   };
 
   const restore = async () => {
@@ -40,12 +39,11 @@ const [purchaseError, setPurchaseError] = useState<string | null>(null);
     }
   };
 
-  React.useEffect(() => {
+  useEffect(() => {
     if (!purchaseError) return;
     const t = setTimeout(() => setPurchaseError(null), 2500);
     return () => clearTimeout(t);
   }, [purchaseError]);
-
 
   if (loading) {
     return (
@@ -58,6 +56,8 @@ const [purchaseError, setPurchaseError] = useState<string | null>(null);
   return (
     <View style={styles.container}>
       <Text style={styles.title}>Upgrade to Premium</Text>
+
+    
       <Text style={styles.subtitle}>
         Support the app and unlock advanced Sudoku challenges.
       </Text>
@@ -73,23 +73,23 @@ const [purchaseError, setPurchaseError] = useState<string | null>(null);
         <Text style={styles.footer}>Premium is active on this account</Text>
       )}
 
-      {!isPremium && lifetimePackage && (
+      {resolvedPackage && (
         <TouchableOpacity
           style={styles.primaryBtn}
           onPress={buyLifetime}
           activeOpacity={0.85}
         >
-        <Text style={styles.primaryText}>
-  Unlock Premium — {lifetimePackage.product.priceString}
-</Text>
-
+          <Text style={styles.primaryText}>
+            Unlock Premium — {resolvedPackage.product.priceString}
+          </Text>
         </TouchableOpacity>
       )}
 
-{purchaseError && (
-  <Text style={styles.footer}>{purchaseError}</Text>
-)}
+      {purchaseError && <Text style={styles.footer}>{purchaseError}</Text>}
 
+      {!isPremium && !resolvedPackage && (
+        <Text style={styles.footer}>Debug: no RevenueCat package found</Text>
+      )}
 
       <TouchableOpacity onPress={restore}>
         <Text style={styles.restore}>Restore Purchase</Text>
@@ -170,7 +170,7 @@ const styles = StyleSheet.create({
     fontSize: 15,
     fontWeight: "800",
     color: "#061B3A",
-     textAlign: "center",
+    textAlign: "center",
   },
   restore: {
     color: "#B9C4D6",

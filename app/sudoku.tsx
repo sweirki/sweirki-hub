@@ -4,7 +4,6 @@ import * as Haptics from "expo-haptics";
 import { generateKillerCages } from "../utils/sudokuGen";
 import { auth } from "../firebase"; // check if logged in
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import { recordGameResult } from "../src/analytics/playerAnalytics";
 import { onGameFinished } from "../src/game/onGameFinished";
 
 import {
@@ -771,34 +770,6 @@ await onGameFinished({
   hintsUsed: 3 - hintsLeft,
 });
 
-    
-// 📊 Phase 8A — record Classic analytics (canonical, non-blocking)
-recordGameResult({
-  username: auth.currentUser?.uid,
-  mode: "classic",
-  win: true,
-  timeSec: time,
-  errors: errorCount,
-  hintsUsed: 3 - hintsLeft,
-});
-
-
-
-// ⭐ Phase 8E — increment games played (total + classic)
-try {
-  const totalRaw = await AsyncStorage.getItem("gamesPlayed:total");
-  const classicRaw = await AsyncStorage.getItem("gamesPlayed:classic");
-
-  const total = totalRaw ? Number(totalRaw) : 0;
-  const classic = classicRaw ? Number(classicRaw) : 0;
-
-  await AsyncStorage.multiSet([
-    ["gamesPlayed:total", String(total + 1)],
-    ["gamesPlayed:classic", String(classic + 1)],
-  ]);
-} catch {
-  // silent fail
-}
   } catch (err) {
     // silent fail
   }

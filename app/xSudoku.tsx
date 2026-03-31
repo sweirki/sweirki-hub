@@ -11,7 +11,6 @@ import {
 } from "react-native";
 
 import { LinearGradient } from "expo-linear-gradient";
-import { recordGameResult } from "../src/analytics/playerAnalytics";
 import { useAchievementsStore } from "./stores/useAchievementsStore";
 import * as Haptics from "expo-haptics";
 import AsyncStorage from "@react-native-async-storage/async-storage";
@@ -595,18 +594,6 @@ const handleGameOverClose = async () => {
   // ✅ Update stats
   await updateStatsOnWin("x", timer, errorCount, 3 - hintsLeft, ladderUser);
 
-// 📊 Phase 8A — record X analytics (canonical, non-blocking)
-recordGameResult({
-  username: auth.currentUser?.uid,
-  mode: "x",
-  win: true,
-  timeSec: timer,
-  errors: errorCount,
-  hintsUsed: 3 - hintsLeft,
-});
-
-
-
 
   // ⭐ Award LADDER XP (same formula as other boards)
   try {
@@ -649,23 +636,6 @@ await onGameFinished({
 
 
   setWinVisible(true);
-
-// ⭐ Phase 8E — increment games played (total + x)
-try {
-  const totalRaw = await AsyncStorage.getItem("gamesPlayed:total");
-  const xRaw = await AsyncStorage.getItem("gamesPlayed:x");
-
-  const total = totalRaw ? Number(totalRaw) : 0;
-  const xCount = xRaw ? Number(xRaw) : 0;
-
-  await AsyncStorage.multiSet([
-    ["gamesPlayed:total", String(total + 1)],
-    ["gamesPlayed:x", String(xCount + 1)],
-  ]);
-} catch {
-  // silent fail
-}
-
 
   // ---------- ACHIEVEMENTS ----------
 unlockAchievement("x_master");

@@ -15,7 +15,6 @@ import {
 
 import { Svg, Line, Rect, Path, Text as SvgText } from "react-native-svg";
 import { useAchievementsStore } from "./stores/useAchievementsStore";
-import { recordGameResult } from "../src/analytics/playerAnalytics";
 import * as Haptics from "expo-haptics";
 import { calculateXpForLadder } from "../utils/ladder/scoreEngine";
 import { awardLadderXP } from "./lib/ladderBridge";
@@ -602,33 +601,6 @@ await onGameFinished({
 
   // Save win history
  saveWin(ladderUser, "killer", timer, errorCount);
- // 📊 Phase 8A — record Killer analytics (canonical, non-blocking)
-recordGameResult({
-  username: auth.currentUser?.uid,
-  mode: "killer",
-  win: true,
-  timeSec: timer,
-  errors: errorCount,
-  hintsUsed: 3 - hintsLeft,
-});
-
-
-
- // ⭐ Phase 8E — increment games played (total + killer)
-try {
-  const totalRaw = await AsyncStorage.getItem("gamesPlayed:total");
-  const killerRaw = await AsyncStorage.getItem("gamesPlayed:killer");
-
-  const total = totalRaw ? Number(totalRaw) : 0;
-  const killer = killerRaw ? Number(killerRaw) : 0;
-
-  await AsyncStorage.multiSet([
-    ["gamesPlayed:total", String(total + 1)],
-    ["gamesPlayed:killer", String(killer + 1)],
-  ]);
-} catch {
-  // silent fail
-}
 
 
   // ---------- ACHIEVEMENTS ----------

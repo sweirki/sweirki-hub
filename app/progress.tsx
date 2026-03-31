@@ -2,7 +2,7 @@ import { View, Text, StyleSheet, ScrollView, TouchableOpacity } from "react-nati
 import { useEffect, useState } from "react";
 import { useRouter } from "expo-router";
 import { auth } from "../firebase";
-
+import React from "react";
 import {
   getAnalytics,
   getProgressSummary,
@@ -13,53 +13,106 @@ import {
 /**
  * ============================
  * Phase 8D — Progress Screen
- * Full, production-ready UI
+ * Fixed loading-safe version
  * ============================
  */
 
+type SummaryType = {
+  totalGames: number;
+  winRate: number | string;
+  totalTime: string;
+  currentStreak: number;
+  bestStreak: number;
+  totalSessions: number;
+  avgSessionTime: string;
+};
+
+type ModeProgressType = {
+  gamesPlayed: number;
+  winRate: number | string;
+  bestTime: string;
+  avgTime: string;
+  avgErrors: number | string;
+  avgHintsUsed: number | string;
+};
+
 export default function ProgressScreen() {
   const router = useRouter();
-  const user = auth.currentUser;
 
   const [loading, setLoading] = useState(true);
-  const [summary, setSummary] = useState<any>(null);
-  const [modes, setModes] = useState<Record<GameMode, any> | null>(null);
+  const [summary, setSummary] = useState<SummaryType | null>(null);
+  const [modes, setModes] = useState<Record<GameMode, ModeProgressType> | null>(null);
+  const [errorText, setErrorText] = useState<string | null>(null);
 
   useEffect(() => {
     let mounted = true;
 
-    (async () => {
+    const loadProgress = async () => {
       try {
-        const analytics = await getAnalytics(user?.uid);
+        const uid = auth.currentUser?.uid;
+
+        if (!uid) {
+          if (mounted) {
+            setErrorText("Could not load your progress right now.");
+          }
+          return;
+        }
+
+        const analytics = await getAnalytics(uid);
 
         if (!mounted) return;
 
-        setSummary(getProgressSummary(analytics));
-
-        setModes({
+        const summaryData = getProgressSummary(analytics);
+        const modesData = {
           classic: getModeProgress(analytics, "classic"),
           daily: getModeProgress(analytics, "daily"),
           hyper: getModeProgress(analytics, "hyper"),
           killer: getModeProgress(analytics, "killer"),
           x: getModeProgress(analytics, "x"),
-        });
-      } catch {
-        // fail silently — progress must never crash app
+        };
+
+        setSummary(summaryData);
+        setModes(modesData);
+      } catch (error) {
+        console.log("Progress screen load failed:", error);
+
+        if (mounted) {
+          setErrorText("Something went wrong while loading progress.");
+        }
       } finally {
-        if (mounted) setLoading(false);
+        if (mounted) {
+          setLoading(false);
+        }
       }
-    })();
+    };
+
+    loadProgress();
 
     return () => {
       mounted = false;
     };
   }, []);
 
-  if (loading || !summary || !modes) {
+  if (loading) {
     return (
       <View style={styles.container}>
         <Text style={styles.title}>Your Progress</Text>
         <Text style={styles.subtitle}>Loading…</Text>
+      </View>
+    );
+  }
+
+  if (!summary || !modes) {
+    return (
+      <View style={styles.container}>
+        <Text style={styles.title}>Your Progress</Text>
+        <Text style={styles.subtitle}>
+          {errorText ?? "No progress data found yet."}
+        </Text>
+
+        <TouchableOpacity style={styles.backBtn} onPress={() => router.back()}>
+          <Text style={styles.backText}>Back</Text>
+        </TouchableOpacity>
       </View>
     );
   }
@@ -72,7 +125,6 @@ export default function ProgressScreen() {
         contentContainerStyle={{ paddingBottom: 40 }}
         showsVerticalScrollIndicator={false}
       >
-        {/* OVERVIEW */}
         <Card title="Overview">
           <Row label="Total Games" value={summary.totalGames} />
           <Row label="Win Rate" value={`${summary.winRate}%`} />
@@ -81,13 +133,11 @@ export default function ProgressScreen() {
           <Row label="Best Streak" value={summary.bestStreak} />
         </Card>
 
-        {/* SESSIONS */}
         <Card title="Sessions">
           <Row label="Total Sessions" value={summary.totalSessions} />
           <Row label="Avg Session Time" value={summary.avgSessionTime} />
         </Card>
 
-        {/* PER MODE */}
         {Object.entries(modes).map(([mode, data]) => (
           <Card key={mode} title={mode.toUpperCase()}>
             <Row label="Games Played" value={data.gamesPlayed} />
@@ -111,12 +161,7 @@ export default function ProgressScreen() {
   );
 }
 
-/* ============================
- * UI COMPONENTS
- * ============================
- */
-
-function Card({ title, children }: any) {
+function Card({ title, children }: { title: string; children: React.ReactNode }) {
   return (
     <View style={styles.card}>
       <Text style={styles.cardTitle}>{title}</Text>
@@ -125,7 +170,7 @@ function Card({ title, children }: any) {
   );
 }
 
-function Row({ label, value }: { label: string; value: any }) {
+function Row({ label, value }: { label: string; value: string | number }) {
   return (
     <View style={styles.row}>
       <Text style={styles.rowLabel}>{label}</Text>
@@ -133,11 +178,6 @@ function Row({ label, value }: { label: string; value: any }) {
     </View>
   );
 }
-
-/* ============================
- * STYLES
- * ============================
- */
 
 const styles = StyleSheet.create({
   container: {

@@ -1,33 +1,21 @@
 export default ({ config }) => ({
   ...config,
 
-  // ─────────────────────────────
-  // App Identity
-  // ─────────────────────────────
   name: "Sweirki Sudoku",
   slug: "sam-sudoku-relinked-v2",
-  version: "4.2.0",
+  version: "4.2.1",
 
   assetBundlePatterns: ["**/*"],
 
-  // ─────────────────────────────
-  // EAS
-  // ─────────────────────────────
   extra: {
     eas: {
       projectId: "c4fddd7b-dab8-45ae-96b4-38d755292c3f",
     },
   },
 
-  // ─────────────────────────────
-  // Prevent double-writing during prebuild
-  // ─────────────────────────────
   ...(process.env.EXPO_PREBUILD
     ? {}
     : {
-        // ─────────────────────────────
-        // General
-        // ─────────────────────────────
         orientation: "portrait",
         scheme: "sweirki",
         icon: "./assets/icon.png",
@@ -38,32 +26,28 @@ export default ({ config }) => ({
           backgroundColor: "#000000",
         },
 
-        // ─────────────────────────────
-        // iOS
-        // ─────────────────────────────
         ios: {
           supportsTablet: true,
           bundleIdentifier: "com.sweirki.sudoku",
-          buildNumber: "2",
+          buildNumber: "16",
           infoPlist: {
             ITSAppUsesNonExemptEncryption: false,
           },
         },
 
-        // ─────────────────────────────
-        // Android (LOCKED – DO NOT CHANGE)
-        // ─────────────────────────────
         android: {
           package: "com.gamesworld.samsudoko",
-          versionCode: 9,
+          versionCode: 24,
           backgroundColor: "#000000",
 
           permissions: [
             "com.android.vending.BILLING",
-            "android.permission.CAMERA",
-            "android.permission.RECORD_AUDIO",
-            "android.permission.MODIFY_AUDIO_SETTINGS",
-            "android.permission.VIBRATE",
+            "android.permission.VIBRATE"
+          ],
+
+          blockedPermissions: [
+            "android.permission.FOREGROUND_SERVICE",
+            "android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK"
           ],
 
           adaptiveIcon: {
@@ -77,20 +61,16 @@ export default ({ config }) => ({
           },
         },
 
-        // ─────────────────────────────
-        // Web
-        // ─────────────────────────────
         web: {
           favicon: "./assets/icon.png",
         },
 
-        // ─────────────────────────────
-        // Plugins
-        // ─────────────────────────────
         plugins: [
           "expo-asset",
-          "expo-audio",
-          "expo-video",
+
+          // ❌ REMOVED expo-audio
+          // ❌ REMOVED expo-video
+
           "expo-font",
           "expo-web-browser",
 
